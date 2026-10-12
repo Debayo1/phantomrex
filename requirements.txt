@@ -1,0 +1,11 @@
+MetaTrader5
+pandas
+numpy
+ta
+xgboost
+scikit-learn
+joblib
+pyTelegramBotAPI
+requests
+matplotlib
+mplfinance
