@@ -5,7 +5,7 @@ import time
 import os
 import joblib
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 import threading
 from ai_features import prepare_indicators, extract_single_feature_vector, FEATURE_COLUMNS, DEFAULT_TREND_MODE
@@ -553,7 +553,7 @@ def check_daily_loss_guard(force=False):
             t = mt5.symbol_info_tick(sym)
             if t and t.time:
                 server_ts = max(server_ts or 0, t.time)
-        server_day = datetime.utcfromtimestamp(server_ts).date() if server_ts else datetime.utcnow().date()
+        server_day = datetime.fromtimestamp(server_ts, timezone.utc).date() if server_ts else datetime.now(timezone.utc).date()
 
         deals = mt5.history_deals_get(datetime.now() - pd.Timedelta(days=4), datetime.now() + pd.Timedelta(days=2)) or []
 
@@ -567,7 +567,7 @@ def check_daily_loss_guard(force=False):
         for d in deals:
             if d.entry not in (mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_OUT_BY):
                 continue
-            if datetime.utcfromtimestamp(d.time).date() != server_day:
+            if datetime.fromtimestamp(d.time, timezone.utc).date() != server_day:
                 continue
             o = opens.get(d.position_id)
             magic = o[0] if o else d.magic
