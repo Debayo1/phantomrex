@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import threading
 from ai_features import prepare_indicators, extract_single_feature_vector, FEATURE_COLUMNS, DEFAULT_TREND_MODE
 from telegram_manager import TelegramBotManager, save_config
+from news_filter import NewsFilter
 
 # Force UTF-8 console output for Windows terminal emoji rendering
 if hasattr(sys.stdout, "reconfigure"):
@@ -64,8 +65,10 @@ DEFAULT_MAX_DAILY_LOSS_PCT = 3.0    # Max net daily loss (% of start-of-day bala
 DEFAULT_MAX_RISK_OVERSHOOT = 1.5    # Skip a trade if real risk > 1.5x the intended risk (e.g. forced 0.01 min lot)
 DAILY_GUARD_CHECK_INTERVAL = 30     # Seconds between broker-history checks
 
-# Global Telegram Bot Manager
+# Global Telegram Bot Manager & Economic News Shield
 tg_manager = TelegramBotManager()
+news_filter = NewsFilter()
+tg_manager.news_filter = news_filter
 
 
 # ==============================================================================
@@ -753,6 +756,14 @@ def run_live():
                 blocked, _reason = check_daily_loss_guard()
                 if blocked:
                     continue
+
+                # High-Impact Economic News Shield (pauses new entries during high-impact USD events)
+                if tg_manager.settings.get("news_filter_enabled", True):
+                    is_news_blocked, news_summary, _ = news_filter.check_news_block()
+                    if is_news_blocked:
+                        if print_heartbeat:
+                            print(f"🛑 [NEWS SHIELD] {symbol}: New entries paused due to {news_summary}")
+                        continue
 
                 max_open = tg_manager.settings.get("max_positions", MAX_OPEN_POSITIONS_PER_SYMBOL)
                 if len(open_positions) >= max_open:

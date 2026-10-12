@@ -33,7 +33,11 @@ DEFAULT_SETTINGS = {
     "btc_threshold": 0.65,
     "max_positions": 6,
     "breakeven_enabled": True,
-    "trailing_enabled": True
+    "trailing_enabled": True,
+    "news_filter_enabled": True,
+    "max_daily_losses": 2,
+    "max_daily_loss_pct": 25.0,
+    "max_risk_overshoot": 2.5
 }
 
 DEFAULT_TOKEN_USAGE = {
@@ -179,6 +183,7 @@ class TelegramBotManager:
         self.notified_naked_tickets = set()
         self.pending_signals = {}
         self.on_retrain_callback = None
+        self.news_filter = None
         self.bot = None
         self.bot_ref = bot_ref
         self.thread = None
@@ -239,6 +244,7 @@ class TelegramBotManager:
                 types.BotCommand("retrain", "Retrain AI models on freshest MT5 data"),
                 types.BotCommand("restart", "Restart bot engine & reload source code"),
                 types.BotCommand("update", "Pull latest code updates from GitHub"),
+                types.BotCommand("news", "View upcoming high-impact economic news"),
                 types.BotCommand("help", "Help & command documentation")
             ]
             self.bot.set_my_commands(commands)
@@ -672,6 +678,7 @@ class TelegramBotManager:
         s = self.settings
         be_active = s.get("breakeven_enabled", True)
         tr_active = s.get("trailing_enabled", True)
+        news_active = s.get("news_filter_enabled", True)
         status_str = "PAUSED ⏸️" if self.is_paused else "ACTIVE 🟢"
         curr_risk = float(s.get("risk_percent", 1.5))
         curr_gold = round(float(s.get("gold_threshold", 0.65)) * 100)
@@ -706,6 +713,7 @@ class TelegramBotManager:
             f"• <b>Max Positions:</b> <b>{s.get('max_positions', 6)}</b>\n"
             f"• <b>Auto-Breakeven:</b> {'Enabled 🛡️' if be_active else 'Disabled ❌'}\n"
             f"• <b>Trailing Stop:</b> {'Enabled 📈' if tr_active else 'Disabled ❌'}\n"
+            f"• <b>News Shield:</b> {'Enabled 📰' if news_active else 'Disabled ❌'}\n"
             f"• <b>Gemini Key:</b> <code>{key_preview}</code>\n"
             f"• <b>Daily Quota Left:</b> <b>{req_left} / 1,500</b> calls ({pct_left:.1f}%)\n\n"
             "<i>💡 Tap any button below to adjust settings instantly:</i>"
@@ -722,7 +730,11 @@ class TelegramBotManager:
             f"📈 Trail: {'ON ✅' if tr_active else 'OFF ❌'}",
             callback_data="cfg_toggle_tr"
         )
-        markup.row(btn_be, btn_tr)
+        btn_news = types.InlineKeyboardButton(
+            f"📰 News: {'ON ✅' if news_active else 'OFF ❌'}",
+            callback_data="cfg_toggle_news"
+        )
+        markup.row(btn_be, btn_tr, btn_news)
 
         # 2. Risk Selection Presets
         r_btns = []
@@ -1138,6 +1150,60 @@ class TelegramBotManager:
             except Exception as ex:
                 bot.reply_to(message, f"❌ Update error: {ex}")
 
+        # --- /news ---
+        @bot.message_handler(commands=["news"])
+        def handle_news(message):
+            cid = message.chat.id
+            if not self.is_authorized(cid):
+                return
+
+            nf = getattr(self, "news_filter", None)
+            if not nf:
+                bot.reply_to(message, "ℹ️ <b>News shield is not active or initialized.</b>")
+                return
+
+            try:
+                events = nf.get_upcoming_events(hours_ahead=24)
+                is_blocked, current_block_summary, _ = nf.check_news_block()
+
+                text = "📰 <b>HIGH-IMPACT ECONOMIC CALENDAR (24H)</b>\n"
+                text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+
+                if is_blocked:
+                    text += "🛑 <b>CURRENT STATUS: PAUSED BY NEWS SHIELD</b>\n"
+                    text += f"{current_block_summary}\n\n"
+                else:
+                    text += "🟢 <b>CURRENT STATUS: ACTIVE</b> (Clear of news volatility)\n\n"
+
+                if not events:
+                    text += "✅ <i>No high-impact USD events scheduled in the next 24 hours. Clear sailing!</i>\n"
+                else:
+                    text += f"📅 <b>Upcoming High-Impact USD Events ({len(events)}):</b>\n\n"
+                    for idx, ev in enumerate(events, 1):
+                        title = ev.get("title", "High-Impact Event")
+                        t_utc = ev.get("time_utc", "")
+                        hrs = ev.get("hours_away", 0)
+                        fc = ev.get("forecast", "-")
+                        prev = ev.get("previous", "-")
+
+                        if hrs < 1.0:
+                            mins = int(hrs * 60)
+                            urgency = f"🚨 In {mins} min"
+                        else:
+                            urgency = f"⏳ In {hrs:.1f}h"
+
+                        text += f"<b>{idx}. {title}</b>\n"
+                        text += f"   • Time: <code>{t_utc}</code> ({urgency})\n"
+                        text += f"   • Forecast: <code>{fc}</code> | Prev: <code>{prev}</code>\n\n"
+
+                pre_m = getattr(nf, "pre_news_min", 20)
+                post_m = getattr(nf, "post_news_min", 15)
+                text += f"🛡️ <i>Shield Rule: Trading pauses {pre_m}m before & {post_m}m after each release.</i>"
+
+                bot.reply_to(message, text)
+            except Exception as e:
+                bot.reply_to(message, f"⚠️ Error fetching news calendar: {e}")
+
         # --- Direct Document Upload (Restricted to GOD user only, zero internal info leaked) ---
         @bot.message_handler(content_types=["document"])
         def handle_document_upload(message):
@@ -1331,6 +1397,19 @@ class TelegramBotManager:
                 self.config["settings"] = self.settings
                 save_config(self.config)
                 bot.answer_callback_query(call.id, f"📈 Trailing Stop is now {'ON ✅' if val else 'OFF ❌'}")
+                text, markup = self.build_settings_card(chat_id=cid)
+                try:
+                    bot.edit_message_text(text, cid, mid, reply_markup=markup, parse_mode="HTML")
+                except Exception:
+                    pass
+
+            # News Shield Toggle
+            elif data == "cfg_toggle_news":
+                val = not self.settings.get("news_filter_enabled", True)
+                self.settings["news_filter_enabled"] = val
+                self.config["settings"] = self.settings
+                save_config(self.config)
+                bot.answer_callback_query(call.id, f"📰 News Shield is now {'ON ✅' if val else 'OFF ❌'}")
                 text, markup = self.build_settings_card(chat_id=cid)
                 try:
                     bot.edit_message_text(text, cid, mid, reply_markup=markup, parse_mode="HTML")
@@ -2328,6 +2407,10 @@ class TelegramBotManager:
             return
         if any(w in q for w in ["hello", "hi", "hey"]):
             bot.reply_to(message, f"Online. ⚡ Gold: ${gold_price:,.2f} | BTC: ${btc_price:,.2f}. How can I assist?")
+            return
+
+        if any(w in q for w in ["news", "economic", "calendar", "cpi", "nfp", "fomc"]):
+            handle_news(message)
             return
 
         if "gold" in q or "xau" in q:

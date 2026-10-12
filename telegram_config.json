@@ -13,6 +13,7 @@
         "max_positions": 6,
         "breakeven_enabled": true,
         "trailing_enabled": true,
+        "news_filter_enabled": true,
         "max_daily_losses": 2,
         "max_daily_loss_pct": 25.0,
         "max_risk_overshoot": 2.5
