@@ -317,6 +317,59 @@ class TelegramBotManager:
             except Exception as e:
                 print(f"⚠️ Failed to send Telegram alert to {cid}: {e}")
 
+    def send_news_summary(self, message):
+        bot = self.bot
+        cid = message.chat.id
+        if not self.is_authorized(cid):
+            return
+
+        nf = getattr(self, "news_filter", None)
+        if not nf:
+            bot.reply_to(message, "ℹ️ <b>News shield is not active or initialized.</b>")
+            return
+
+        try:
+            events = nf.get_upcoming_events(hours_ahead=24)
+            is_blocked, current_block_summary, _ = nf.check_news_block()
+
+            text = "📰 <b>HIGH-IMPACT ECONOMIC CALENDAR (24H)</b>\n"
+            text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+
+            if is_blocked:
+                text += "🛑 <b>CURRENT STATUS: PAUSED BY NEWS SHIELD</b>\n"
+                text += f"{current_block_summary}\n\n"
+            else:
+                text += "🟢 <b>CURRENT STATUS: ACTIVE</b> (Clear of news volatility)\n\n"
+
+            if not events:
+                text += "✅ <i>No high-impact USD events scheduled in the next 24 hours. Clear sailing!</i>\n"
+            else:
+                text += f"📅 <b>Upcoming High-Impact USD Events ({len(events)}):</b>\n\n"
+                for idx, ev in enumerate(events, 1):
+                    title = ev.get("title", "High-Impact Event")
+                    t_utc = ev.get("time_utc", "")
+                    hrs = ev.get("hours_away", 0)
+                    fc = ev.get("forecast", "-")
+                    prev = ev.get("previous", "-")
+
+                    if hrs < 1.0:
+                        mins = int(hrs * 60)
+                        urgency = f"🚨 In {mins} min"
+                    else:
+                        urgency = f"⏳ In {hrs:.1f}h"
+
+                    text += f"<b>{idx}. {title}</b>\n"
+                    text += f"   • Time: <code>{t_utc}</code> ({urgency})\n"
+                    text += f"   • Forecast: <code>{fc}</code> | Prev: <code>{prev}</code>\n\n"
+
+            pre_m = getattr(nf, "pre_news_min", 20)
+            post_m = getattr(nf, "post_news_min", 15)
+            text += f"🛡️ <i>Shield Rule: Trading pauses {pre_m}m before & {post_m}m after each release.</i>"
+
+            bot.reply_to(message, text)
+        except Exception as e:
+            bot.reply_to(message, f"⚠️ Error fetching news calendar: {e}")
+
     def check_and_prompt_unprotected_trades(self, specific_ticket=None, target_chat_id=None):
         """
         Scans open positions for missing Stop Loss or Take Profit.
@@ -1153,56 +1206,7 @@ class TelegramBotManager:
         # --- /news ---
         @bot.message_handler(commands=["news"])
         def handle_news(message):
-            cid = message.chat.id
-            if not self.is_authorized(cid):
-                return
-
-            nf = getattr(self, "news_filter", None)
-            if not nf:
-                bot.reply_to(message, "ℹ️ <b>News shield is not active or initialized.</b>")
-                return
-
-            try:
-                events = nf.get_upcoming_events(hours_ahead=24)
-                is_blocked, current_block_summary, _ = nf.check_news_block()
-
-                text = "📰 <b>HIGH-IMPACT ECONOMIC CALENDAR (24H)</b>\n"
-                text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-
-                if is_blocked:
-                    text += "🛑 <b>CURRENT STATUS: PAUSED BY NEWS SHIELD</b>\n"
-                    text += f"{current_block_summary}\n\n"
-                else:
-                    text += "🟢 <b>CURRENT STATUS: ACTIVE</b> (Clear of news volatility)\n\n"
-
-                if not events:
-                    text += "✅ <i>No high-impact USD events scheduled in the next 24 hours. Clear sailing!</i>\n"
-                else:
-                    text += f"📅 <b>Upcoming High-Impact USD Events ({len(events)}):</b>\n\n"
-                    for idx, ev in enumerate(events, 1):
-                        title = ev.get("title", "High-Impact Event")
-                        t_utc = ev.get("time_utc", "")
-                        hrs = ev.get("hours_away", 0)
-                        fc = ev.get("forecast", "-")
-                        prev = ev.get("previous", "-")
-
-                        if hrs < 1.0:
-                            mins = int(hrs * 60)
-                            urgency = f"🚨 In {mins} min"
-                        else:
-                            urgency = f"⏳ In {hrs:.1f}h"
-
-                        text += f"<b>{idx}. {title}</b>\n"
-                        text += f"   • Time: <code>{t_utc}</code> ({urgency})\n"
-                        text += f"   • Forecast: <code>{fc}</code> | Prev: <code>{prev}</code>\n\n"
-
-                pre_m = getattr(nf, "pre_news_min", 20)
-                post_m = getattr(nf, "post_news_min", 15)
-                text += f"🛡️ <i>Shield Rule: Trading pauses {pre_m}m before & {post_m}m after each release.</i>"
-
-                bot.reply_to(message, text)
-            except Exception as e:
-                bot.reply_to(message, f"⚠️ Error fetching news calendar: {e}")
+            self.send_news_summary(message)
 
         # --- Direct Document Upload (Restricted to GOD user only, zero internal info leaked) ---
         @bot.message_handler(content_types=["document"])
@@ -2310,6 +2314,8 @@ class TelegramBotManager:
                 handle_closeall(message)
             elif text == "🔄 Restart Bot":
                 handle_restart(message)
+            elif text in ["📰 News", "📰 Economic News"]:
+                self.send_news_summary(message)
             else:
                 self._handle_conversational_chat(message, text)
 
@@ -2410,7 +2416,7 @@ class TelegramBotManager:
             return
 
         if any(w in q for w in ["news", "economic", "calendar", "cpi", "nfp", "fomc"]):
-            handle_news(message)
+            self.send_news_summary(message)
             return
 
         if "gold" in q or "xau" in q:
