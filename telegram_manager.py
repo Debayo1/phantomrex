@@ -274,12 +274,51 @@ class TelegramBotManager:
                 try:
                     self.bot.infinity_polling(timeout=20, long_polling_timeout=10, skip_pending=True)
                 except Exception as e:
-                    print(f"⚠️ Telegram polling error on VPS: {e}. Retrying in 5s...")
-                    time.sleep(5)
+                    err_str = str(e)
+                    if "409" in err_str or "Conflict" in err_str:
+                        print("⚠️ [TELEGRAM 409 CONFLICT] Another bot instance is active. Retrying in 15s...")
+                        time.sleep(15)
+                    else:
+                        print(f"⚠️ Telegram polling error on VPS: {e}. Retrying in 5s...")
+                        time.sleep(5)
 
         self.thread = threading.Thread(target=_poll, daemon=True)
         self.thread.start()
         print("📱 Telegram Bot polling thread running.")
+
+    def trigger_restart(self, delay=1.5):
+        """
+        Safely restarts the bot engine on Windows or Linux without leaving duplicate orphan processes.
+        """
+        def _do_restart():
+            time.sleep(delay)
+            # 1. Stop Telegram polling to release the getUpdates connection immediately
+            try:
+                if self.bot:
+                    self.bot.stop_polling()
+            except Exception:
+                pass
+
+            # 2. Shutdown MT5 session gracefully
+            try:
+                import MetaTrader5 as mt5
+                mt5.shutdown()
+            except Exception:
+                pass
+
+            # 3. Spawn fresh new process
+            try:
+                if sys.platform == "win32":
+                    subprocess.Popen([sys.executable] + sys.argv, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                else:
+                    subprocess.Popen([sys.executable] + sys.argv)
+            except Exception as e:
+                print(f"⚠️ Failed to spawn replacement process: {e}")
+
+            # 4. Force terminate the old process completely so it stops running in background
+            os._exit(0)
+
+        threading.Thread(target=_do_restart, daemon=True).start()
 
     def get_user_role(self, chat_id):
         cid = int(chat_id)
@@ -1154,15 +1193,7 @@ class TelegramBotManager:
                 "• Re-connecting to MetaTrader 5\n"
                 "• Bot will be back online in ~5 seconds!"
             )
-
-            def _do_restart():
-                time.sleep(1.5)
-                try:
-                    os.execv(sys.executable, [sys.executable] + sys.argv)
-                except Exception:
-                    os._exit(0)
-
-            threading.Thread(target=_do_restart, daemon=True).start()
+            self.trigger_restart(delay=1.5)
 
         # --- /update ---
         @bot.message_handler(commands=["update"])
@@ -1193,13 +1224,7 @@ class TelegramBotManager:
                     bot.reply_to(message, "✅ <b>System is already up to date.</b>")
                 else:
                     bot.reply_to(message, "🎉 <b>Update downloaded!</b>\n\n🔄 Restarting engine now...")
-                    def _do_restart():
-                        time.sleep(2)
-                        try:
-                            os.execv(sys.executable, [sys.executable] + sys.argv)
-                        except Exception:
-                            os._exit(0)
-                    threading.Thread(target=_do_restart, daemon=True).start()
+                    self.trigger_restart(delay=2.0)
             except Exception as ex:
                 bot.reply_to(message, f"❌ Update error: {ex}")
 
@@ -1244,15 +1269,7 @@ class TelegramBotManager:
                     f.write(downloaded_file)
 
                 bot.send_message(cid, "✅ <b>Update applied successfully!</b>\n\n🔄 Restarting engine now...")
-
-                def _do_restart():
-                    time.sleep(2)
-                    try:
-                        os.execv(sys.executable, [sys.executable] + sys.argv)
-                    except Exception:
-                        os._exit(0)
-
-                threading.Thread(target=_do_restart, daemon=True).start()
+                self.trigger_restart(delay=2.0)
 
             except Exception as ex:
                 bot.reply_to(message, f"❌ Update failed: {ex}")

@@ -6,11 +6,24 @@ import os
 import joblib
 import sys
 from datetime import datetime, timezone
+import socket
 
 import threading
 from ai_features import prepare_indicators, extract_single_feature_vector, FEATURE_COLUMNS, DEFAULT_TREND_MODE
 from telegram_manager import TelegramBotManager, save_config
 from news_filter import NewsFilter
+
+_INSTANCE_LOCK_SOCKET = None
+
+def acquire_single_instance_lock(port=48123):
+    global _INSTANCE_LOCK_SOCKET
+    try:
+        _INSTANCE_LOCK_SOCKET = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _INSTANCE_LOCK_SOCKET.bind(("127.0.0.1", port))
+        _INSTANCE_LOCK_SOCKET.listen(1)
+        return True
+    except OSError:
+        return False
 
 # Force UTF-8 console output for Windows terminal emoji rendering
 if hasattr(sys.stdout, "reconfigure"):
@@ -899,6 +912,11 @@ def run_live():
 # ==============================================================================
 
 if __name__ == "__main__":
+    if not acquire_single_instance_lock():
+        print("❌ [SINGLE-INSTANCE LOCK] Another instance of bot.py is already running on this machine!")
+        print("👉 Terminate the other process first to prevent duplicate Telegram connections.")
+        sys.exit(1)
+
     connect_mt5()
     run_live()
     mt5.shutdown()
