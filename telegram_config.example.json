@@ -1,0 +1,40 @@
+{
+    "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+    "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE",
+    "authorized_chat_ids": [],
+    "is_paused": false,
+    "active_account": "demo",
+    "settings": {
+        "risk_percent": 1.5,
+        "gold_threshold": 0.65,
+        "btc_threshold": 0.65,
+        "max_positions": 2,
+        "breakeven_enabled": true,
+        "trailing_enabled": true,
+        "news_filter_enabled": true,
+        "max_daily_losses": 2,
+        "max_daily_loss_pct": 25.0,
+        "max_risk_overshoot": 2.5
+    },
+    "accounts": {
+        "demo": {
+            "login": 0,
+            "password": "YOUR_DEMO_PASSWORD",
+            "server": "Exness-MT5Trial9"
+        },
+        "live": {
+            "login": 0,
+            "password": "YOUR_LIVE_PASSWORD",
+            "server": "Exness-MT5Real27"
+        }
+    },
+    "token_usage": {
+        "total_prompt_tokens": 0,
+        "total_candidates_tokens": 0,
+        "total_tokens": 0,
+        "requests_today": 0,
+        "last_date": ""
+    },
+    "god_user_id": 0,
+    "user_roles": {}
+}

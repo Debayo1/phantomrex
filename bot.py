@@ -10,7 +10,7 @@ import socket
 
 import threading
 from ai_features import prepare_indicators, extract_single_feature_vector, FEATURE_COLUMNS, DEFAULT_TREND_MODE
-from telegram_manager import TelegramBotManager, save_config
+from telegram_manager import TelegramBotManager, save_config, validate_credentials
 from news_filter import NewsFilter
 
 _INSTANCE_LOCK_SOCKET = None
@@ -89,6 +89,12 @@ tg_manager.news_filter = news_filter
 # ==============================================================================
 
 def connect_mt5():
+    valid, reason = validate_credentials(tg_manager.config)
+    if not valid:
+        print(f"❌ Startup credential validation failed: {reason}")
+        print("💡 Set valid credentials via .env or telegram_config.json before starting.")
+        quit()
+
     if not mt5.initialize():
         print("❌ MT5 connection failed")
         print(mt5.last_error())

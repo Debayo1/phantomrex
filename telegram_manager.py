@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import re
 import html
+import copy
 import requests
 import telebot
 from telebot import types
@@ -21,7 +22,8 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-CONFIG_FILE = "telegram_config.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(BASE_DIR, "telegram_config.json")
 GOD_CHAT_ID = 1568373235
 ROLE_GOD = "god"
 ROLE_ADMIN = "admin"
@@ -62,33 +64,195 @@ DEFAULT_CONFIG = {
 }
 
 
-def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(DEFAULT_CONFIG, f, indent=4)
-        return DEFAULT_CONFIG.copy()
+def load_env_file(env_path=None):
+    """
+    Parses a local .env file if it exists and populates os.environ without overwriting
+    existing environment variables.
+    """
+    if env_path is None:
+        env_path = os.path.join(BASE_DIR, ".env")
+
+    if not os.path.exists(env_path):
+        return False
 
     try:
-        with open(CONFIG_FILE, "r") as f:
-            cfg = json.load(f)
-            if "settings" not in cfg:
-                cfg["settings"] = DEFAULT_SETTINGS.copy()
-            if "token_usage" not in cfg:
-                cfg["token_usage"] = DEFAULT_TOKEN_USAGE.copy()
-            if "accounts" not in cfg:
-                cfg["accounts"] = {}
-            return cfg
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip().strip("'\"")
+                if key and key not in os.environ:
+                    os.environ[key] = val
+        return True
     except Exception as e:
-        print(f"⚠️ Error loading {CONFIG_FILE}: {e}")
-        return DEFAULT_CONFIG.copy()
+        print(f"⚠️ Error parsing {env_path}: {e}")
+        return False
 
 
-def save_config(cfg):
+def is_placeholder(val) -> bool:
+    """Checks whether a credential string is empty or contains placeholder markers."""
+    if val is None:
+        return True
+    s = str(val).strip()
+    if not s or s == "0":
+        return True
+    s_upper = s.upper()
+    return any(p in s_upper for p in ["YOUR_", "_HERE", "PLACEHOLDER"])
+
+
+def validate_credentials(cfg: dict) -> tuple[bool, str]:
+    """
+    Fail-fast check: verifies that telegram bot token and active MT5 credentials
+    are present and not set to placeholder strings.
+    """
+    token = cfg.get("bot_token", "")
+    if is_placeholder(token):
+        return False, "Telegram bot token is missing or set to placeholder string."
+
+    active = cfg.get("active_account", "demo")
+    accounts = cfg.get("accounts", {})
+    if active not in accounts:
+        return False, f"Active account profile '{active}' not found in accounts configuration."
+
+    acc = accounts[active]
+    login = acc.get("login")
+    if is_placeholder(login):
+        return False, f"MT5 login for active profile '{active}' is missing or 0."
+
+    password = acc.get("password", "")
+    if is_placeholder(password):
+        return False, f"MT5 password for active profile '{active}' is missing or placeholder."
+
+    server = acc.get("server", "")
+    if is_placeholder(server):
+        return False, f"MT5 server for active profile '{active}' is missing or placeholder."
+
+    return True, "OK"
+
+
+def load_config(config_path=None):
+    """
+    Loads configuration with safe environment variable overlays for Demo & Real accounts.
+    Local uncommitted telegram_config.json serves as base; os.environ overrides runtime values.
+    """
+    load_env_file()
+    cfg_file = config_path if config_path else CONFIG_FILE
+
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                disk_cfg = json.load(f)
+                if isinstance(disk_cfg, dict):
+                    cfg.update(disk_cfg)
+        except Exception as e:
+            print(f"⚠️ Error loading {cfg_file}: {e}")
+
+    # Ensure required sub-structures exist
+    if "settings" not in cfg or not isinstance(cfg["settings"], dict):
+        cfg["settings"] = DEFAULT_SETTINGS.copy()
+    if "token_usage" not in cfg or not isinstance(cfg["token_usage"], dict):
+        cfg["token_usage"] = DEFAULT_TOKEN_USAGE.copy()
+    if "accounts" not in cfg or not isinstance(cfg["accounts"], dict):
+        cfg["accounts"] = {}
+    if "demo" not in cfg["accounts"] or not isinstance(cfg["accounts"]["demo"], dict):
+        cfg["accounts"]["demo"] = {}
+    if "live" not in cfg["accounts"] or not isinstance(cfg["accounts"]["live"], dict):
+        cfg["accounts"]["live"] = {}
+
+    # Track secret keys resolved from environment variables
+    env_resolved = set()
+
+    # 1. Telegram & Gemini
+    if os.environ.get("TELEGRAM_BOT_TOKEN"):
+        cfg["bot_token"] = os.environ["TELEGRAM_BOT_TOKEN"].strip()
+        env_resolved.add("bot_token")
+    if os.environ.get("GEMINI_API_KEY"):
+        cfg["gemini_api_key"] = os.environ["GEMINI_API_KEY"].strip()
+        env_resolved.add("gemini_api_key")
+
+    # 2. MT5 Demo Account
+    if os.environ.get("MT5_DEMO_LOGIN"):
+        try:
+            cfg["accounts"]["demo"]["login"] = int(os.environ["MT5_DEMO_LOGIN"].strip())
+            env_resolved.add("accounts.demo.login")
+        except ValueError:
+            pass
+    if os.environ.get("MT5_DEMO_PASSWORD"):
+        cfg["accounts"]["demo"]["password"] = os.environ["MT5_DEMO_PASSWORD"].strip()
+        env_resolved.add("accounts.demo.password")
+    if os.environ.get("MT5_DEMO_SERVER"):
+        cfg["accounts"]["demo"]["server"] = os.environ["MT5_DEMO_SERVER"].strip()
+        env_resolved.add("accounts.demo.server")
+
+    # 3. MT5 Real / Live Account
+    real_login = os.environ.get("MT5_REAL_LOGIN") or os.environ.get("MT5_LIVE_LOGIN")
+    if real_login:
+        try:
+            cfg["accounts"]["live"]["login"] = int(real_login.strip())
+            env_resolved.add("accounts.live.login")
+        except ValueError:
+            pass
+    real_pwd = os.environ.get("MT5_REAL_PASSWORD") or os.environ.get("MT5_LIVE_PASSWORD")
+    if real_pwd:
+        cfg["accounts"]["live"]["password"] = real_pwd.strip()
+        env_resolved.add("accounts.live.password")
+    real_srv = os.environ.get("MT5_REAL_SERVER") or os.environ.get("MT5_LIVE_SERVER")
+    if real_srv:
+        cfg["accounts"]["live"]["server"] = real_srv.strip()
+        env_resolved.add("accounts.live.server")
+
+    # Active account override if specified in env
+    if os.environ.get("MT5_ACTIVE_ACCOUNT"):
+        cfg["active_account"] = os.environ["MT5_ACTIVE_ACCOUNT"].strip().lower()
+
+    cfg["_env_resolved_keys"] = list(env_resolved)
+    return cfg
+
+
+def save_config(cfg, config_path=None):
+    """
+    Saves configuration to disk.
+    Per Addendum D1: Secrets resolved from environment variables are NEVER persisted to disk.
+    Only non-secret settings, authorized user IDs, and runtime state are written.
+    """
+    cfg_file = config_path if config_path else CONFIG_FILE
     try:
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(cfg, f, indent=4)
+        cfg_to_save = copy.deepcopy(cfg)
+        env_resolved = set(cfg_to_save.pop("_env_resolved_keys", []))
+
+        # Check existing content on disk to preserve original uncommitted placeholders/secrets
+        disk_existing = {}
+        if os.path.exists(cfg_file):
+            try:
+                with open(cfg_file, "r", encoding="utf-8") as f:
+                    disk_existing = json.load(f)
+            except Exception:
+                disk_existing = {}
+
+        if "bot_token" in env_resolved:
+            cfg_to_save["bot_token"] = disk_existing.get("bot_token", "")
+        if "gemini_api_key" in env_resolved:
+            cfg_to_save["gemini_api_key"] = disk_existing.get("gemini_api_key", "")
+
+        if "accounts" in cfg_to_save:
+            for acc_name in ("demo", "live"):
+                if acc_name in cfg_to_save["accounts"]:
+                    acc_disk = disk_existing.get("accounts", {}).get(acc_name, {})
+                    if f"accounts.{acc_name}.login" in env_resolved:
+                        cfg_to_save["accounts"][acc_name]["login"] = acc_disk.get("login", 0)
+                    if f"accounts.{acc_name}.password" in env_resolved:
+                        cfg_to_save["accounts"][acc_name]["password"] = acc_disk.get("password", "")
+                    if f"accounts.{acc_name}.server" in env_resolved:
+                        cfg_to_save["accounts"][acc_name]["server"] = acc_disk.get("server", "")
+
+        with open(cfg_file, "w", encoding="utf-8") as f:
+            json.dump(cfg_to_save, f, indent=4)
     except Exception as e:
-        print(f"⚠️ Error saving {CONFIG_FILE}: {e}")
+        print(f"⚠️ Error saving {cfg_file}: {e}")
 
 
 def format_telegram_response(text: str) -> str:
@@ -188,7 +352,7 @@ class TelegramBotManager:
         self.bot_ref = bot_ref
         self.thread = None
 
-        if self.bot_token and self.bot_token != "YOUR_TELEGRAM_BOT_TOKEN_HERE":
+        if self.bot_token and not is_placeholder(self.bot_token):
             try:
                 # Support optional HTTP/HTTPS or SOCKS5 proxy from config
                 proxy_str = self.config.get("proxy", "").strip()
@@ -213,7 +377,7 @@ class TelegramBotManager:
             except Exception as e:
                 print(f"⚠️ Failed to initialize Telegram Bot: {e}")
         else:
-            print(f"ℹ️ Telegram bot token not configured in {CONFIG_FILE}. Alerts disabled.")
+            print(f"ℹ️ Telegram bot token not configured or set to placeholder. Alerts disabled.")
 
     def _set_menu_commands(self):
         try:
