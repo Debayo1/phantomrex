@@ -30,3 +30,6 @@ Run the bot and verify that credentials load properly without placeholder warnin
 python bot.py
 ```
 Check that the bot connects to MT5 and starts polling Telegram before leaving the console.
+
+#### 5. Strict Graduation & Account Safety
+Before switching to real money trading, consult [GRADUATION.md](file:///c:/Users/HP%201030/Desktop/forexbot/GRADUATION.md) for the mandatory 50-trade demo evaluation gate and 0.01-lot size constraints.
