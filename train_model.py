@@ -596,15 +596,27 @@ def train_single_asset(symbol_cfg):
     final_model = make_model(spw_full)
     final_model.fit(full_data["X"], full_data["y"])
 
-    # Keep previous model for rollback
-    if os.path.exists(model_save_path):
-        shutil.copyfile(model_save_path, model_save_path.replace(".pkl", ".prev.pkl"))
+    # Phase 4.1 Candidate File Isolation (Addendum B1):
+    # Save newly trained model ONLY to <model_file>.candidate.pkl.
+    # Never directly overwrite <model_file> or .prev.pkl during training.
+    candidate_save_path = model_save_path.replace(".pkl", ".candidate.pkl")
+
+    # Format holdout timestamps for post-trained slice evaluation (Phase 4.2)
+    holdout_ts = []
+    if len(chosen["holdout_data"]["bar"]) > 0:
+        for b in chosen["holdout_data"]["bar"]:
+            t_raw = df_low.iloc[b]["time"]
+            if isinstance(t_raw, (int, float, np.integer, np.floating)):
+                holdout_ts.append(datetime.fromtimestamp(float(t_raw)).strftime("%Y-%m-%d %H:%M"))
+            else:
+                holdout_ts.append(str(t_raw))
 
     package = {
         "model": final_model,
         "validation_model": chosen["dev_model"],
         "holdout_predictions": chosen["holdout_probs"],
         "holdout_bars": chosen["holdout_data"]["bar"],
+        "holdout_timestamps": holdout_ts,
         "holdout_exits": chosen["holdout_data"]["exit"],
         "holdout_net_r": chosen["holdout_data"]["net_r"],
         "features": FEATURE_COLUMNS,
@@ -644,8 +656,8 @@ def train_single_asset(symbol_cfg):
         "validation": "15% untouched holdout, boundary purged, leak-free H1, thinned t>=2.5, costs included",
         "trained_date": datetime.now().strftime("%Y-%m-%d %H:%M")
     }
-    joblib.dump(package, model_save_path)
-    print(f"💾 Saved to {model_save_path} (previous model kept as .prev.pkl)")
+    joblib.dump(package, candidate_save_path)
+    print(f"💾 Candidate package saved to {candidate_save_path} (live and .prev.pkl untouched)")
 
     audit_report = {
         "symbol": symbol_name,
@@ -732,6 +744,7 @@ def train_single_asset(symbol_cfg):
         "n_folds": chosen["n_folds"],
         "trained_date": package["trained_date"],
         "model_file": model_save_path,
+        "candidate_file": candidate_save_path,
         "report_file": report_file
     }
 
@@ -739,8 +752,10 @@ def train_single_asset(symbol_cfg):
 def run_retrain_task(target_symbol=None):
     """
     Executes training on target_symbol ('XAUUSDm', 'BTCUSDm', or None for both active assets).
-    Safe for programmatic execution inside background threads.
+    Follows Phase 4 candidate isolation & atomic promotion gate.
     """
+    import model_promotion
+
     if not connect_mt5():
         return [{"success": False, "error": "Could not connect to MT5"}]
 
@@ -753,6 +768,15 @@ def run_retrain_task(target_symbol=None):
             if clean_target not in sym.upper():
                 continue
         res = train_single_asset(cfg)
+        if res and res.get("success"):
+            # Phase 4.2 & 4.3 Fair Holdout Comparison Gate and Atomic Promotion
+            promo = model_promotion.promote_candidate(cfg["model_file"])
+            res["promoted"] = promo.get("promoted", False)
+            res["promotion_reason"] = promo.get("reason", "")
+            if promo.get("promoted"):
+                print(f"🏆 Candidate for {sym} PROMOTED to live model! Reason: {promo['reason']}")
+            else:
+                print(f"🛑 Candidate for {sym} REJECTED by gate! Reason: {promo['reason']}")
         if res:
             results.append(res)
     return results

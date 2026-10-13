@@ -412,6 +412,7 @@ class TelegramBotManager:
                 types.BotCommand("buy", "Quick market buy with SL & TP"),
                 types.BotCommand("sell", "Quick market sell with SL & TP"),
                 types.BotCommand("retrain", "Retrain AI models on freshest MT5 data"),
+                types.BotCommand("rollback", "Restore previous AI model backup (.prev.pkl)"),
                 types.BotCommand("restart", "Restart bot engine & reload source code"),
                 types.BotCommand("update", "Pull latest code updates from GitHub"),
                 types.BotCommand("news", "View upcoming high-impact economic news"),
@@ -1300,6 +1301,7 @@ class TelegramBotManager:
                     import train_model
                     res_list = train_model.run_retrain_task(target_symbol=target)
                     lines = [f"🎉 <b>AI RETRAINING COMPLETE! 🧠</b>\n"]
+                    promoted_any = False
                     for r in res_list:
                         if r.get("success"):
                             sym = r["symbol"]
@@ -1313,6 +1315,12 @@ class TelegramBotManager:
                             else:
                                 edge = "⛔ FAIL — new entries disabled"
 
+                            if r.get("promoted"):
+                                promoted_any = True
+                                promo_badge = f"🏆 <b>PROMOTED</b> ({r.get('promotion_reason', '')})"
+                            else:
+                                promo_badge = f"🛑 <b>REJECTED BY GATE</b> ({r.get('promotion_reason', '')})"
+
                             lines.append(
                                 f"• <b>{sym}</b>: {samples:,} setups simulated\n"
                                 f"  - Trend filter: <b>{r.get('trend_mode', 'slow')}</b>\n"
@@ -1320,21 +1328,71 @@ class TelegramBotManager:
                                 f"  - Holdout Win Rate: <b>{w_rate:.1f}%</b> | Exp: <b>{r.get('holdout_expectancy_r', 0):+.3f}R</b> (Thinned t: {r.get('holdout_thinned_t', 0):+.2f})\n"
                                 f"  - Dev OOS Expectancy: <b>{r.get('oos_expectancy_r', 0):+.3f}R</b> | +Folds: {r.get('positive_folds', 0)}/{r.get('n_folds', 0)}\n"
                                 f"  - Edge check: <b>{edge}</b>\n"
+                                f"  - Promotion gate: {promo_badge}\n"
                             )
                         else:
                             lines.append(f"• <b>{r.get('symbol')}</b>: ⚠️ {r.get('error')}\n")
 
-                    lines.append("✨ <i>Models hot-reloaded (previous models kept as .prev.pkl).</i>")
+                    if promoted_any:
+                        lines.append("🏆 <i>Promoted models hot-reloaded into live memory (previous versions saved as .prev.pkl).</i>")
+                    else:
+                        lines.append("ℹ️ <i>Candidate models did not pass promotion gate. Incumbent models retained untouched.</i>")
                     report_text = "\n".join(lines)
                     self.send_broadcast_alert(report_text)
 
-                    if self.on_retrain_callback:
+                    if promoted_any and self.on_retrain_callback:
                         self.on_retrain_callback(target)
 
                 except Exception as e:
                     self.send_broadcast_alert(f"⚠️ Retraining error: {e}")
 
             threading.Thread(target=_worker, daemon=True).start()
+
+        # --- /rollback ---
+        @bot.message_handler(commands=["rollback"])
+        def handle_rollback(message):
+            cid = message.chat.id
+            if not self.is_authorized(cid):
+                return
+            if not self.can_control(cid):
+                bot.reply_to(message, "👁️ Read-Only Mode: You cannot trigger model rollbacks.")
+                return
+
+            import model_promotion
+
+            parts = message.text.split()
+            target = parts[1].lower() if len(parts) > 1 else None
+
+            targets_to_check = []
+            if not target or "gold" in target or "xau" in target:
+                targets_to_check.append(("Gold (XAUUSDm)", "gold_ai_model.pkl", "gold"))
+            if not target or "btc" in target or "bitcoin" in target:
+                targets_to_check.append(("Bitcoin (BTCUSDm)", "btc_ai_model.pkl", "btc"))
+
+            lines = ["⏪ <b>AI MODEL ROLLBACK RESULTS</b>\n"]
+            rolled_back_any = False
+
+            for label, model_file, sym_key in targets_to_check:
+                res = model_promotion.rollback_model(model_file)
+                if res.get("success"):
+                    rolled_back_any = True
+                    lines.append(
+                        f"• <b>{label}:</b> ✅ Restored from <code>{model_file}.prev.pkl</code>\n"
+                        f"  - Trained: <b>{res.get('trained_date')}</b>\n"
+                        f"  - Cutoff: <b>{res.get('threshold', 65.0):.0f}%</b> | Trend: <b>{res.get('trend_mode')}</b>\n"
+                        f"  - Edge check: <b>{'PASS' if res.get('edge_ok') else 'DISABLED'}</b>\n"
+                    )
+                else:
+                    lines.append(f"• <b>{label}:</b> ⚠️ {res.get('error')}\n")
+
+            if rolled_back_any:
+                lines.append("🔄 <i>Hot-reloading rolled-back model(s) into live trading engine...</i>")
+                if self.on_retrain_callback:
+                    self.on_retrain_callback(target)
+            else:
+                lines.append("ℹ️ <i>No live models were modified.</i>")
+
+            bot.reply_to(message, "\n".join(lines))
 
         # --- /logout ---
         @bot.message_handler(commands=["logout"])

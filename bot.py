@@ -1025,11 +1025,17 @@ def run_live():
                         def _auto_worker():
                             try:
                                 import train_model
-                                train_model.run_retrain_task()
-                                reload_ai_models()
-                                tg_manager.send_broadcast_alert(
-                                    "🎉 <b>Sunday AI Self-Learning Complete!</b> Models hot-reloaded with fresh market edge."
-                                )
+                                res_list = train_model.run_retrain_task()
+                                promoted_any = any(r.get("promoted", False) for r in (res_list or []))
+                                if promoted_any:
+                                    reload_ai_models()
+                                    tg_manager.send_broadcast_alert(
+                                        "🎉 <b>Sunday AI Self-Learning Complete!</b> Models promoted through gate and hot-reloaded with fresh market edge."
+                                    )
+                                else:
+                                    tg_manager.send_broadcast_alert(
+                                        "ℹ️ <b>Sunday AI Self-Learning Complete:</b> Candidates did not beat incumbent gate or lacked edge. Incumbent models retained untouched."
+                                    )
                             except Exception as ex:
                                 tg_manager.send_broadcast_alert(f"⚠️ Sunday Auto-Retrain error: {ex}")
                         threading.Thread(target=_auto_worker, daemon=True).start()
