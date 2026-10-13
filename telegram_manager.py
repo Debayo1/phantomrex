@@ -133,12 +133,12 @@ def validate_credentials(cfg: dict) -> tuple[bool, str]:
     return True, "OK"
 
 
-def load_config(config_path=None):
+def load_config(config_path=None, env_path=None):
     """
     Loads configuration with safe environment variable overlays for Demo & Real accounts.
     Local uncommitted telegram_config.json serves as base; os.environ overrides runtime values.
     """
-    load_env_file()
+    load_env_file(env_path=env_path)
     cfg_file = config_path if config_path else CONFIG_FILE
 
     cfg = copy.deepcopy(DEFAULT_CONFIG)

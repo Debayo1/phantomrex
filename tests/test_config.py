@@ -31,6 +31,11 @@ def clean_env(monkeypatch):
     ]
     for k in keys_to_clear:
         monkeypatch.delenv(k, raising=False)
+    from telegram_manager import load_env_file as orig_load_env
+    monkeypatch.setattr(
+        "telegram_manager.load_env_file",
+        lambda env_path=None: orig_load_env(env_path) if env_path is not None else False
+    )
     yield monkeypatch
 
 
