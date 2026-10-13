@@ -13,6 +13,8 @@ scratch/
 .system_generated/
 economic_calendar_cache.json
 backtest_trades.csv
+reports/*.json
+FIX_PLAN.md
 
 # Secrets & Local Databases (Untracked)
 telegram_config.json

@@ -1305,15 +1305,19 @@ class TelegramBotManager:
                             w_rate = r["win_rate"]
                             th = r["recommended_threshold"] * 100
                             samples = r["total_samples"]
-                            edge = "✅ PASS — trading enabled" if r.get("edge_ok") else "⛔ FAIL — new entries disabled"
+                            if r.get("edge_ok"):
+                                edge = "✅ PASS — trading enabled"
+                            elif r.get("status") == "INSUFFICIENT_DATA":
+                                edge = f"⚠️ INSUFFICIENT_DATA ({r.get('holdout_trades', 0)}/30 holdout trades) — new entries disabled"
+                            else:
+                                edge = "⛔ FAIL — new entries disabled"
+
                             lines.append(
                                 f"• <b>{sym}</b>: {samples:,} setups simulated\n"
                                 f"  - Trend filter: <b>{r.get('trend_mode', 'slow')}</b>\n"
-                                f"  - Cutoff: <b>{th:.0f}%</b> | OOS trades: {r.get('oos_trades', 0)}\n"
-                                f"  - OOS Win Rate (after costs): <b>{w_rate:.1f}%</b>\n"
-                                f"  - Avg win {r.get('oos_avg_win_r', 0):+.2f}R / avg loss {r.get('oos_avg_loss_r', 0):+.2f}R\n"
-                                f"  - Expectancy: <b>{r.get('oos_expectancy_r', 0):+.3f}R</b> per trade\n"
-                                f"  - Profitable folds: {r.get('positive_folds', 0)}/{r.get('n_folds', 0)} | AUC {r.get('cv_roc_auc', 0.5):.3f}\n"
+                                f"  - Cutoff: <b>{th:.0f}%</b> | Holdout trades: {r.get('holdout_trades', 0)} (Dev OOS: {r.get('oos_trades', 0)})\n"
+                                f"  - Holdout Win Rate: <b>{w_rate:.1f}%</b> | Exp: <b>{r.get('holdout_expectancy_r', 0):+.3f}R</b> (Thinned t: {r.get('holdout_thinned_t', 0):+.2f})\n"
+                                f"  - Dev OOS Expectancy: <b>{r.get('oos_expectancy_r', 0):+.3f}R</b> | +Folds: {r.get('positive_folds', 0)}/{r.get('n_folds', 0)}\n"
                                 f"  - Edge check: <b>{edge}</b>\n"
                             )
                         else:
