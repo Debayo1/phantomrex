@@ -33,7 +33,7 @@ DEFAULT_SETTINGS = {
     "risk_percent": 1.5,
     "gold_threshold": 0.65,
     "btc_threshold": 0.65,
-    "max_positions": 6,
+    "max_positions": 2,
     "breakeven_enabled": True,
     "trailing_enabled": True,
     "news_filter_enabled": True,
@@ -320,6 +320,11 @@ def get_main_keyboard():
     markup.add(btn_signal, btn_pause)
     markup.add(btn_restart, btn_closeall)
     return markup
+
+
+def get_signal_magic(symbol: str) -> int:
+    """Returns an in-range magic number (101005 for Gold, 102005 for BTC) for signal trades."""
+    return 102005 if "BTC" in str(symbol).upper() else 101005
 
 
 class TelegramBotManager:
@@ -860,7 +865,7 @@ class TelegramBotManager:
 
     def execute_signal_trade(self, sig_data, user_name="Trader"):
         """
-        Sends deal order to MetaTrader 5 with isolated Magic 109999.
+        Sends deal order to MetaTrader 5 within the bot's magic range.
         """
         symbol = sig_data["symbol"]
         action = sig_data["action"]
@@ -889,7 +894,7 @@ class TelegramBotManager:
         elif flags & mt5.ORDER_FILLING_RETURN:
             filling_type = mt5.ORDER_FILLING_RETURN
 
-        SIGNAL_MAGIC = 109999
+        signal_magic = get_signal_magic(symbol)
         clean_user = re.sub(r'[^a-zA-Z0-9]', '', user_name)[:8]
         comment = f"Sig_{clean_user}"
 
@@ -902,7 +907,7 @@ class TelegramBotManager:
             "sl": sl,
             "tp": tp,
             "deviation": 30,
-            "magic": SIGNAL_MAGIC,
+            "magic": signal_magic,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling_type,
@@ -1845,6 +1850,7 @@ class TelegramBotManager:
                 if ok:
                     del self.pending_signals[sig_id]
                     ticket = res_data
+                    signal_magic = get_signal_magic(sig_data.get("symbol", ""))
                     bot.answer_callback_query(call.id, f"🚀 Executed #{ticket}!")
                     action_sym = "📈 BUY" if sig_data["action"] == "BUY" else "📉 SELL"
                     sl_fmt = f"${sig_data['sl']:.2f}" if sig_data.get('sl') else "None"
@@ -1859,7 +1865,7 @@ class TelegramBotManager:
                             f"• <b>Stop Loss:</b> <code>{sl_fmt}</code>\n"
                             f"• <b>Take Profit:</b> <code>{tp_fmt}</code>\n"
                             f"• <b>Authorized By:</b> {user_name}\n\n"
-                            f"🛡️ <i>Secured under Magic #109999 (Signal Copilot).</i>",
+                            f"🛡️ <i>Secured under Magic #{signal_magic} (Signal Copilot).</i>",
                             cid, mid, parse_mode="HTML"
                         )
                     except Exception:
@@ -2039,8 +2045,8 @@ class TelegramBotManager:
                 return
 
             val = int(parts[1])
-            if val < 1 or val > 20:
-                bot.reply_to(message, "⚠️ Max positions must be between 1 and 20.")
+            if val < 1 or val > 3:
+                bot.reply_to(message, "⚠️ Max positions must be between 1 and 3.")
                 return
 
             self.settings["max_positions"] = val

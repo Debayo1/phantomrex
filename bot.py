@@ -62,12 +62,18 @@ ASSET_CONFIGS = {
 TIMEFRAME_LOW = mt5.TIMEFRAME_M5    # Trigger & execution timeframe (5-min candles)
 TIMEFRAME_HIGH = mt5.TIMEFRAME_H1   # Macro trend timeframe (1-hour candles)
 
+# ONLY OWNER MAY CHANGE THIS CONSTANT
+MAX_LOT_CAP = 0.01
+
+# ONLY OWNER MAY CHANGE THIS CONSTANT
+FORCE_SINGLE_POSITION = True
+
 INITIAL_BALANCE = 1000.0            # Account balance fallback ($)
-RISK_PER_SIGNAL = 0.015             # 1.5% total risk per setup (split across 3 targets: 0.5% each)
-NUM_TARGETS = 3                     # Open 3 scaled positions (TP1, TP2, TP3 runner)
+RISK_PER_SIGNAL = 0.015             # 1.5% total risk per setup (split across targets)
+NUM_TARGETS = 3                     # Open targets (TP1, TP2, TP3 runner if not forced single)
 ATR_MULTIPLIER = 1.5                # Stop loss distance multiplier (1.5x ATR)
 MIN_ADX = 12                        # Minimum ADX trend strength filter
-MAX_OPEN_POSITIONS_PER_SYMBOL = 6   # Max concurrent positions per asset (allows up to 2 active batches)
+MAX_OPEN_POSITIONS_PER_SYMBOL = 2   # Max concurrent positions per asset (clamped to 2)
 
 LIVE_POLL_INTERVAL = 2              # Seconds between polling loops
 HEARTBEAT_INTERVAL = 10             # Seconds between console status lines
@@ -232,6 +238,9 @@ def calculate_lot_size(symbol, order_type, risk_amount, entry, sl):
     lot_size = np.floor(raw_lot / step_lot + 1e-9) * step_lot
     lot_size = max(min_lot, min(max_lot, lot_size))
 
+    # Hard-coded 0.01 lot cap (Addendum A1)
+    lot_size = min(lot_size, MAX_LOT_CAP)
+
     return round(lot_size, 2)
 
 
@@ -282,13 +291,13 @@ def open_multi_target_batch(symbol, order_type, stop_dist, total_risk_amount, tp
     - Small balance (< $100): Caps at 1 single position (0.01 lot) to strictly limit risk exposure!
     """
     balance = get_account_balance()
-    is_small_account = (balance < 100.0)
-
-    if is_small_account:
+    # Force single position mode (TP_Core only) regardless of balance per Addendum A1
+    if FORCE_SINGLE_POSITION or balance < 100.0:
         sub_risk = total_risk_amount
         active_multipliers = [1.8]
         active_labels = ["TP_Core"]
-        print(f"\n⚡ [Small-Account Guard] Opening 1 Safe Single-Position Trade on {symbol} (Balance: ${balance:.2f} | Risk: ${total_risk_amount:.2f} | {ai_tier_label})...")
+        mode_label = "Single-Position Mode" if FORCE_SINGLE_POSITION else "Small-Account Guard"
+        print(f"\n⚡ [{mode_label}] Opening 1 Safe Single-Position Trade on {symbol} (Balance: ${balance:.2f} | Risk: ${total_risk_amount:.2f} | {ai_tier_label})...")
     else:
         sub_risk = total_risk_amount / NUM_TARGETS
         active_multipliers = tp_multipliers
@@ -401,8 +410,8 @@ def manage_active_trades(symbol, cfg, current_candle, closed_candle=None):
     spread_buffer = max(cfg["spread_est"], point * 10)
 
     for pos in positions:
-        # Hands-off manual trades: Only manage bot trades (skip manual trades where magic is 0 or not matching bot's magic)
-        if pos.magic == 0 or pos.magic < cfg["magic_base"] or pos.magic > cfg["magic_base"] + 10:
+        # Hands-off manual trades: Only manage bot trades within magic range (magic_base < magic <= magic_base + 10)
+        if not (cfg["magic_base"] < pos.magic <= cfg["magic_base"] + 10):
             continue
 
         ticket = pos.ticket
@@ -784,7 +793,7 @@ def run_live():
                             print(f"🛑 [NEWS SHIELD] {symbol}: New entries paused due to {news_summary}")
                         continue
 
-                max_open = tg_manager.settings.get("max_positions", MAX_OPEN_POSITIONS_PER_SYMBOL)
+                max_open = min(int(tg_manager.settings.get("max_positions", MAX_OPEN_POSITIONS_PER_SYMBOL)), 3)
                 if len(open_positions) >= max_open:
                     continue
 
@@ -792,6 +801,15 @@ def run_live():
                     continue
 
                 if last_candle["h1_adx"] < MIN_ADX:
+                    continue
+
+                # Phase 1.1: Strict edge enforcement (Ground Rules 8 & 9)
+                if ai_model is None or not asset_data.get("edge_ok", False):
+                    if not asset_data.get("no_edge_warned", False):
+                        asset_data["no_edge_warned"] = True
+                        tg_manager.send_broadcast_alert(
+                            f"⛔ <b>{symbol}:</b> No validated AI model with positive edge. New entries paused until /retrain passes."
+                        )
                     continue
 
                 # 2. Strategy Triggers
@@ -823,17 +841,21 @@ def run_live():
                         print(f"⏳ {symbol} Entry Guard: Price overextended (${price:.2f} vs EMA {last_candle['m5_ema9']:.2f}). Waiting for pullback.")
                         continue
 
-                    # Machine Learning AI Validation Filter
-                    ai_approved = True
-                    win_prob = 1.0
+                    # Phase 1.2: Eliminate Trade Blindly fallback - defaults to False and 0.0
+                    ai_approved = False
+                    win_prob = 0.0
 
                     thresh_key = "gold_threshold" if "XAU" in symbol else "btc_threshold"
                     active_thresh = tg_manager.settings.get(thresh_key, asset_data["threshold"])
 
                     if ai_model is not None:
-                        feat_vec = extract_single_feature_vector(last_candle, prev_candle, direction)
-                        win_prob = float(ai_model.predict_proba(feat_vec.reshape(1, -1))[0][1])
-                        ai_approved = (win_prob >= active_thresh)
+                        try:
+                            feat_vec = extract_single_feature_vector(last_candle, prev_candle, direction)
+                            win_prob = float(ai_model.predict_proba(feat_vec.reshape(1, -1))[0][1])
+                            ai_approved = (win_prob >= active_thresh)
+                        except Exception as e:
+                            print(f"⚠️ {symbol} AI Inference error: {e}")
+                            ai_approved = False
 
                     if not ai_approved:
                         print(f"✋ {symbol} AI FILTERED: Win Confidence {win_prob*100:.1f}% < threshold {active_thresh*100:.0f}%. Setup skipped!")
