@@ -947,6 +947,9 @@ class TelegramBotManager:
         curr_gold = round(float(s.get("gold_threshold", 0.65)) * 100)
         curr_btc = round(float(s.get("btc_threshold", 0.65)) * 100)
 
+        curr_losses = int(s.get("max_daily_losses", 2))
+        curr_loss_pct = float(s.get("max_daily_loss_pct", 3.0))
+
         raw_key = self.config.get("gemini_api_key", "").strip()
         key_preview = f"{raw_key[:7]}...{raw_key[-4:]} (Active ✅)" if len(raw_key) > 10 else "Not Configured ⚠️"
 
@@ -973,7 +976,8 @@ class TelegramBotManager:
             f"• <b>Risk Per Signal:</b> <b>{curr_risk:.1f}%</b>\n"
             f"• <b>Gold AI Threshold:</b> <b>{curr_gold}%</b>\n"
             f"• <b>BTC AI Threshold:</b> <b>{curr_btc}%</b>\n"
-            f"• <b>Max Positions:</b> <b>{s.get('max_positions', 6)}</b>\n"
+            f"• <b>Max Positions:</b> <b>{s.get('max_positions', 2)}</b>\n"
+            f"• <b>Max Daily Losses:</b> <b>{curr_losses} setups</b> ({curr_loss_pct:.1f}% max DD)\n"
             f"• <b>Auto-Breakeven:</b> {'Enabled 🛡️' if be_active else 'Disabled ❌'}\n"
             f"• <b>Trailing Stop:</b> {'Enabled 📈' if tr_active else 'Disabled ❌'}\n"
             f"• <b>News Shield:</b> {'Enabled 📰' if news_active else 'Disabled ❌'}\n"
@@ -1019,6 +1023,13 @@ class TelegramBotManager:
             mark = "● " if curr_btc == b else ""
             b_btns.append(types.InlineKeyboardButton(f"₿ {mark}{b}%", callback_data=f"cfg_btc_{b}"))
         markup.row(*b_btns)
+
+        # 5. Max Daily Losses Presets
+        l_btns = []
+        for l in [1, 2, 3, 5]:
+            mark = "● " if curr_losses == l else ""
+            l_btns.append(types.InlineKeyboardButton(f"🛑 {mark}{l} Loss{'es' if l > 1 else ''}", callback_data=f"cfg_losses_{l}"))
+        markup.row(*l_btns)
 
         # 5. Quick Account Switch
         markup.row(
@@ -1735,6 +1746,19 @@ class TelegramBotManager:
                     self.config["settings"] = self.settings
                     save_config(self.config)
                     bot.answer_callback_query(call.id, f"₿ BTC Threshold set to {val}%")
+                    text, markup = self.build_settings_card(chat_id=cid)
+                    bot.edit_message_text(text, cid, mid, reply_markup=markup, parse_mode="HTML")
+                except Exception:
+                    pass
+
+            # 6. Max Daily Losses Presets
+            elif data.startswith("cfg_losses_"):
+                try:
+                    val = int(data.split("_")[2])
+                    self.settings["max_daily_losses"] = val
+                    self.config["settings"] = self.settings
+                    save_config(self.config)
+                    bot.answer_callback_query(call.id, f"🛑 Max Daily Losses set to {val}")
                     text, markup = self.build_settings_card(chat_id=cid)
                     bot.edit_message_text(text, cid, mid, reply_markup=markup, parse_mode="HTML")
                 except Exception:
