@@ -12,6 +12,7 @@ import threading
 from ai_features import prepare_indicators, extract_single_feature_vector, FEATURE_COLUMNS, DEFAULT_TREND_MODE
 from telegram_manager import TelegramBotManager, save_config, validate_credentials
 from news_filter import NewsFilter
+import db_ledger
 
 _INSTANCE_LOCK_SOCKET = None
 
@@ -280,11 +281,29 @@ def send_market_order(symbol, order_type, price, sl, tp, lot_size, magic, commen
         print(f"❌ Execution failed ({comment}): {result.comment} (code {result.retcode})")
         return None
     else:
-        print(f"🚀 {comment} Executed! Ticket #{result.order} | Lot: {lot_size} | Entry: ${price:.2f} | SL: ${sl:.2f} | TP: ${tp:.2f}")
-        return result.order
+        order_ticket = result.order
+        # Phase 3.2 Position Identifier Resolution (Addendum B2)
+        pos_id = None
+        try:
+            positions = mt5.positions_get(symbol=symbol) or []
+            for p in positions:
+                if getattr(p, "magic", None) == magic:
+                    pos_id = p.ticket
+                    break
+            if not pos_id:
+                deals = mt5.history_deals_get(ticket=order_ticket) or []
+                if deals:
+                    pos_id = deals[0].position_id
+        except Exception:
+            pass
+        if not pos_id:
+            pos_id = order_ticket
+
+        print(f"🚀 {comment} Executed! Order #{order_ticket} (Position #{pos_id}) | Lot: {lot_size} | Entry: ${price:.2f} | SL: ${sl:.2f} | TP: ${tp:.2f}")
+        return order_ticket, pos_id
 
 
-def open_multi_target_batch(symbol, order_type, stop_dist, total_risk_amount, tp_multipliers, magic_base, ai_tier_label, win_prob):
+def open_multi_target_batch(symbol, order_type, stop_dist, total_risk_amount, tp_multipliers, magic_base, ai_tier_label, win_prob, candle_metrics=None):
     """
     Carries the trade by splitting exposure into targets:
     - Normal balance (>= $100): Splits into 3 targets (TP1 Cash Lock, TP2 Core, TP3 Runner).
@@ -319,6 +338,7 @@ def open_multi_target_batch(symbol, order_type, stop_dist, total_risk_amount, tp
     first_sl = 0.0
 
     dir_str = "BUY 📈" if order_type == mt5.ORDER_TYPE_BUY else "SELL 📉"
+    direction = 1 if order_type == mt5.ORDER_TYPE_BUY else -1
 
     for idx, (tp_mult, label) in enumerate(zip(active_multipliers, active_labels), start=1):
         tick = mt5.symbol_info_tick(symbol)
@@ -345,15 +365,61 @@ def open_multi_target_batch(symbol, order_type, stop_dist, total_risk_amount, tp
                    f"(max {max_overshoot:.1f}x)")
             print(f"🛑 Real-Risk Guard skipped {symbol} {msg}")
             skipped_msgs.append(msg)
+            # Log skipped signal
+            try:
+                db_ledger.log_signal(
+                    symbol=symbol,
+                    direction=direction,
+                    status="SKIPPED",
+                    skip_reason="Real-Risk Guard",
+                    entry_price=entry_p,
+                    initial_sl=sl,
+                    initial_risk_price=abs(entry_p - sl),
+                    initial_risk_currency=real_risk,
+                    confidence=win_prob,
+                    m5_rsi=candle_metrics.get("m5_rsi") if candle_metrics else None,
+                    h1_adx=candle_metrics.get("h1_adx") if candle_metrics else None,
+                    trend_mode=candle_metrics.get("trend_mode") if candle_metrics else None,
+                    threshold=candle_metrics.get("threshold") if candle_metrics else None,
+                )
+            except Exception as ex:
+                print(f"⚠️ Error logging skipped signal to db_ledger: {ex}")
             continue
 
         comment_str = f"AIBot_{label}"
         magic = magic_base + idx
-        t_id = send_market_order(symbol, order_type, entry_p, sl, tp, lot, magic, comment_str)
-        if t_id:
+        res = send_market_order(symbol, order_type, entry_p, sl, tp, lot, magic, comment_str)
+        if res:
+            if isinstance(res, tuple):
+                t_id, pos_id = res
+            else:
+                t_id, pos_id = res, res
             executed_tickets.append(t_id)
             executed_labels.append(label)
             actual_total_risk += real_risk
+
+            # Phase 3.1 & 3.2: Log executed signal with resolved position_ticket to signals.db
+            try:
+                spread_val = (tick.ask - tick.bid) if tick else 0.0
+                db_ledger.log_signal(
+                    symbol=symbol,
+                    direction=direction,
+                    status="EXECUTED",
+                    position_ticket=pos_id,
+                    entry_price=entry_p,
+                    initial_sl=sl,
+                    initial_risk_price=abs(entry_p - sl),
+                    initial_risk_currency=real_risk,
+                    m5_rsi=candle_metrics.get("m5_rsi") if candle_metrics else None,
+                    h1_adx=candle_metrics.get("h1_adx") if candle_metrics else None,
+                    trend_mode=candle_metrics.get("trend_mode") if candle_metrics else None,
+                    confidence=win_prob,
+                    threshold=candle_metrics.get("threshold") if candle_metrics else None,
+                    spread=spread_val,
+                    model_trained_date=candle_metrics.get("trained_date") if candle_metrics else None,
+                )
+            except Exception as ex:
+                print(f"⚠️ Error logging executed signal to db_ledger: {ex}")
 
     if skipped_msgs and not executed_tickets:
         tg_manager.send_broadcast_alert(
@@ -839,6 +905,22 @@ def run_live():
                     ema_dist = abs(price - last_candle["m5_ema9"])
                     if ema_dist > 1.4 * atr:
                         print(f"⏳ {symbol} Entry Guard: Price overextended (${price:.2f} vs EMA {last_candle['m5_ema9']:.2f}). Waiting for pullback.")
+                        try:
+                            db_ledger.log_signal(
+                                symbol=symbol,
+                                direction=direction,
+                                status="SKIPPED",
+                                skip_reason="Overextended",
+                                entry_price=price,
+                                m5_rsi=float(last_candle["m5_rsi"]),
+                                h1_adx=float(last_candle["h1_adx"]),
+                                trend_mode=asset_data.get("trend_mode", "slow"),
+                                confidence=0.0,
+                                threshold=float(active_thresh),
+                                model_trained_date=asset_data.get("trained_date"),
+                            )
+                        except Exception as ex:
+                            print(f"⚠️ Error logging overextended signal: {ex}")
                         continue
 
                     # Phase 1.2: Eliminate Trade Blindly fallback - defaults to False and 0.0
@@ -860,6 +942,22 @@ def run_live():
                     if not ai_approved:
                         print(f"✋ {symbol} AI FILTERED: Win Confidence {win_prob*100:.1f}% < threshold {active_thresh*100:.0f}%. Setup skipped!")
                         asset_data["last_traded_bar"] = candle_time
+                        try:
+                            db_ledger.log_signal(
+                                symbol=symbol,
+                                direction=direction,
+                                status="SKIPPED",
+                                skip_reason="Low AI Confidence",
+                                entry_price=price,
+                                m5_rsi=float(last_candle["m5_rsi"]),
+                                h1_adx=float(last_candle["h1_adx"]),
+                                trend_mode=asset_data.get("trend_mode", "slow"),
+                                confidence=win_prob,
+                                threshold=float(active_thresh),
+                                model_trained_date=asset_data.get("trained_date"),
+                            )
+                        except Exception as ex:
+                            print(f"⚠️ Error logging filtered signal: {ex}")
                         continue
 
                     # Dynamic AI Lot Size & Risk Multiplier
@@ -893,7 +991,14 @@ def run_live():
                         tp_multipliers=cfg["tp_multipliers"],
                         magic_base=cfg["magic_base"],
                         ai_tier_label=tier_label,
-                        win_prob=win_prob
+                        win_prob=win_prob,
+                        candle_metrics={
+                            "m5_rsi": float(last_candle["m5_rsi"]),
+                            "h1_adx": float(last_candle["h1_adx"]),
+                            "trend_mode": asset_data.get("trend_mode", "slow"),
+                            "threshold": float(active_thresh),
+                            "trained_date": asset_data.get("trained_date"),
+                        }
                     )
 
                     asset_data["last_traded_bar"] = candle_time

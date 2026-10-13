@@ -389,6 +389,7 @@ class TelegramBotManager:
             commands = [
                 types.BotCommand("menu", "Open interactive quick-action buttons"),
                 types.BotCommand("status", "Live market telemetry (Gold & BTC)"),
+                types.BotCommand("stats", "Historical performance, R-multiples & calibration"),
                 types.BotCommand("balance", "Account balance & floating PnL"),
                 types.BotCommand("positions", "List active trades"),
                 types.BotCommand("settings", "View & configure bot parameters"),
@@ -2163,6 +2164,73 @@ class TelegramBotManager:
                     f"  SL: ${pos.sl:.2f} | TP: ${pos.tp:.2f}\n"
                 )
             bot.reply_to(message, "\n".join(lines))
+
+        # --- /stats ---
+        @bot.message_handler(commands=["stats", "performance"])
+        def handle_stats(message):
+            cid = message.chat.id
+            if not self.is_authorized(cid):
+                return
+
+            try:
+                import db_ledger
+
+                earliest_ts = db_ledger.get_earliest_signal_timestamp()
+                if earliest_ts:
+                    try:
+                        from_date = datetime.fromisoformat(earliest_ts)
+                    except Exception:
+                        from_date = datetime.now() - timedelta(days=90)
+                else:
+                    from_date = datetime.now() - timedelta(days=90)
+
+                to_date = datetime.now() + timedelta(days=1)
+                deals = mt5.history_deals_get(from_date, to_date) or []
+
+                stats = db_ledger.compute_performance_stats(deals)
+
+                tot = stats["total_closed"]
+                matched = stats["matched_count"]
+                unmatched = stats["unmatched_count"]
+                wr = stats["win_rate_pct"]
+                exp_usd = stats["expectancy_usd"]
+                exp_r = stats["expectancy_r"]
+                avg_win_usd = stats["avg_win_usd"]
+                avg_loss_usd = stats["avg_loss_usd"]
+                avg_win_r = stats["avg_win_r"]
+                avg_loss_r = stats["avg_loss_r"]
+                dd_usd = stats["max_drawdown_usd"]
+                dd_r = stats["max_drawdown_r"]
+                exits = stats["exit_reasons"]
+
+                lines = [
+                    "📊 <b>HISTORICAL PERFORMANCE & STATS TELEMETRY</b>",
+                    "<i>Full deal-to-signal join on position_id</i>\n",
+                    f"• <b>Closed Positions:</b> <b>{tot}</b> (Matched: {matched} | Unmatched: {unmatched})",
+                    f"• <b>Win Rate:</b> <b>{wr:.1f}%</b> (Matched closed trades)",
+                    f"• <b>Avg Win:</b> +${avg_win_usd:.2f} (+{avg_win_r:.2f}R)",
+                    f"• <b>Avg Loss:</b> -${abs(avg_loss_usd):.2f} ({avg_loss_r:.2f}R)",
+                    f"• <b>Expectancy:</b> <b>{exp_usd:+.2f}$</b> | <b>{exp_r:+.2f}R</b> per trade",
+                    f"• <b>Max Drawdown:</b> -${dd_usd:.2f} (-{dd_r:.2f}R)\n",
+                    "🎯 <b>EXIT REASONS:</b>",
+                    f"• TP Hits: <b>{exits['pct_tp']:.1f}%</b>",
+                    f"• Breakeven (BE): <b>{exits['pct_be']:.1f}%</b>",
+                    f"• Stop Loss (SL): <b>{exits['pct_sl']:.1f}%</b>",
+                    f"• Other / Manual: <b>{exits['pct_other']:.1f}%</b>",
+                    f"• Unmatched: <b>{exits['pct_unmatched']:.1f}%</b>\n",
+                    "🧠 <b>CONFIDENCE CALIBRATION TABLE:</b>",
+                ]
+
+                for b in stats["calibration"]:
+                    b_name = b["bucket"]
+                    b_disp = b["display"]
+                    lines.append(f"• <b>{b_name}:</b> {b_disp}")
+
+                report_text = "\n".join(lines)
+                bot.reply_to(message, report_text)
+
+            except Exception as e:
+                bot.reply_to(message, f"⚠️ Error computing stats telemetry: {e}")
 
         # --- /analyze ---
         @bot.message_handler(commands=["analyze"])
