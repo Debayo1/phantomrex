@@ -6,6 +6,7 @@ import os
 import shutil
 import sys
 import json
+import csv
 from datetime import datetime
 from xgboost import XGBClassifier
 from sklearn.metrics import roc_auc_score
@@ -35,19 +36,48 @@ DEFAULT_CANDLES_HIGH = 6000   # ~6 months of H1 candles
 CANDLES_LOW = DEFAULT_CANDLES_LOW
 CANDLES_HIGH = DEFAULT_CANDLES_HIGH
 
+CONFIG_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram_config.json")
+
 
 def get_history_candle_counts():
     """
-    Returns (candles_low, candles_high) with environment variable override support.
+    Returns (candles_low, candles_high) with environment variable and config override support.
+    Priority:
+      1. os.environ["CANDLES_LOW"] / os.environ["CANDLES_HIGH"]
+      2. telegram_config.json -> settings["candles_low"] / settings["candles_high"]
+      3. DEFAULT_CANDLES_LOW (40000) / DEFAULT_CANDLES_HIGH (6000)
     """
-    try:
-        low = int(os.environ.get("CANDLES_LOW", DEFAULT_CANDLES_LOW))
-    except (ValueError, TypeError):
+    low = None
+    high = None
+
+    if "CANDLES_LOW" in os.environ:
+        try:
+            low = int(os.environ["CANDLES_LOW"])
+        except (ValueError, TypeError):
+            pass
+    if "CANDLES_HIGH" in os.environ:
+        try:
+            high = int(os.environ["CANDLES_HIGH"])
+        except (ValueError, TypeError):
+            pass
+
+    if low is None or high is None:
+        if os.path.exists(CONFIG_FILE_PATH):
+            try:
+                with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
+                    st = json.load(f).get("settings", {})
+                    if low is None and "candles_low" in st:
+                        low = int(st["candles_low"])
+                    if high is None and "candles_high" in st:
+                        high = int(st["candles_high"])
+            except Exception:
+                pass
+
+    if low is None:
         low = DEFAULT_CANDLES_LOW
-    try:
-        high = int(os.environ.get("CANDLES_HIGH", DEFAULT_CANDLES_HIGH))
-    except (ValueError, TypeError):
+    if high is None:
         high = DEFAULT_CANDLES_HIGH
+
     return low, high
 
 
@@ -376,6 +406,45 @@ def save_audit_report(report_data, output_path=None):
     return output_path
 
 
+def log_retrain_to_registry(symbol_name, candles_low, candles_high, chosen):
+    """
+    Appends the retrain run to research/registry.csv (Addendum 7 / Phase 8 G2).
+    Format: date,variant,params,dev_result,pass_fail
+    """
+    registry_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "research", "registry.csv")
+    if not os.path.exists(os.path.dirname(registry_path)):
+        os.makedirs(os.path.dirname(registry_path), exist_ok=True)
+    if not os.path.exists(registry_path):
+        with open(registry_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["date", "variant", "params", "dev_result", "pass_fail"])
+
+    today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    variant = "80k_history_test"
+    params = f"{candles_low}M5_{candles_high}H1_{symbol_name}"
+    dev_res = (
+        f"Holdout_Trades={chosen['n_holdout']},"
+        f"Holdout_Net={chosen['holdout_net']['exp']:+.3f}R,"
+        f"Dev_AI_Net={chosen['net']['exp']:+.3f}R,"
+        f"th_t={chosen['thinned']['t']:+.2f},"
+        f"folds={chosen['positive_folds']}/{chosen['n_folds']}"
+    )
+
+    if chosen.get("edge_ok"):
+        pass_fail = "PASS"
+    else:
+        st = chosen.get("status", "FAIL")
+        if st == "INSUFFICIENT_DATA":
+            pass_fail = f"FAIL (INSUFFICIENT_DATA: {chosen.get('n_holdout', 0)}/{MIN_HOLDOUT_TRADES} trades)"
+        else:
+            pass_fail = "FAIL (no edge)"
+
+    with open(registry_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([today_str, variant, params, dev_res, pass_fail])
+    print(f"📝 Logged retrain run to {registry_path}")
+
+
 def walk_forward(data):
     X, y, bars, exits = data["X"], data["y"], data["bar"], data["exit"]
     n = len(y)
@@ -571,7 +640,6 @@ def train_single_asset(symbol_cfg):
         key=lambda r: (
             r["edge_ok"],
             r["status"] == "INSUFFICIENT_DATA",
-            r["holdout_net"]["exp"] if r["n_holdout"] > 0 else -999.0,
             r["net"]["exp"]
         ),
         reverse=True
@@ -579,6 +647,18 @@ def train_single_asset(symbol_cfg):
 
     full_data = chosen["full_data"]
     th = chosen["th"]
+
+    date_start_str = df_low["time"].iloc[0].strftime("%Y-%m-%d %H:%M") if hasattr(df_low["time"].iloc[0], "strftime") else str(df_low["time"].iloc[0])
+    date_end_str = df_low["time"].iloc[-1].strftime("%Y-%m-%d %H:%M") if hasattr(df_low["time"].iloc[-1], "strftime") else str(df_low["time"].iloc[-1])
+
+    print(f"\n📊 Telemetry for {symbol_name}:")
+    print(f"   • M5 Candles: Requested {candles_low} | Actual {len(df_low)}")
+    print(f"   • H1 Candles: Requested {candles_high} | Actual {len(df_high)}")
+    print(f"   • Data Span:  {date_start_str} to {date_end_str}")
+    for r in results:
+        print(f"   • Mode '{r['mode']}': {len(r['full_data']['y'])} total setups "
+              f"({len(r['dev_data']['y'])} dev / {len(r['holdout_data']['y'])} holdout)")
+    print(f"   • Filtered Holdout Trades (Cutoff {th*100:.0f}%): {chosen['n_holdout']} trades")
 
     print(f"\n✅ Chosen trend mode: '{chosen['mode']}' | cutoff {th*100:.0f}% | "
           f"Holdout net expectancy {chosen['holdout_net']['exp']:+.3f}R over {chosen['n_holdout']} trades "
@@ -646,7 +726,7 @@ def train_single_asset(symbol_cfg):
             "avg_win_r": chosen["net"]["avg_win"],
             "avg_loss_r": chosen["net"]["avg_loss"],
             "expectancy_r_net": chosen["net"]["exp"],
-            "expectancy_r_gross": chosen["gross"]["exp"],
+            "expectancy_gross_r": chosen["gross"]["exp"],
             "raw_t": chosen["net"]["t"],
             "thinned_t": chosen["thinned"]["t"],
             "positive_folds": chosen["positive_folds"],
@@ -664,8 +744,21 @@ def train_single_asset(symbol_cfg):
         "resolved_symbol": resolved_symbol,
         "timestamp": datetime.now().isoformat(),
         "history_candles": {
-            "candles_low": candles_low,
-            "candles_high": candles_high,
+            "requested_low": candles_low,
+            "actual_low": len(df_low),
+            "requested_high": candles_high,
+            "actual_high": len(df_high),
+            "date_start": date_start_str,
+            "date_end": date_end_str,
+        },
+        "setups_per_trend_mode": {
+            r["mode"]: len(r["full_data"]["y"]) for r in results
+        },
+        "setup_counts": {
+            "total_setups": len(full_data["y"]),
+            "dev_setups": len(chosen["dev_data"]["y"]),
+            "holdout_setups": len(chosen["holdout_data"]["y"]),
+            "holdout_filtered_trades": chosen["n_holdout"]
         },
         "trend_mode": chosen["mode"],
         "recommended_threshold": float(th),
@@ -720,6 +813,7 @@ def train_single_asset(symbol_cfg):
     }
     report_file = save_audit_report(audit_report)
     print(f"📊 Saved audit report to {report_file}")
+    log_retrain_to_registry(symbol_name, candles_low, candles_high, chosen)
 
     return {
         "success": True,

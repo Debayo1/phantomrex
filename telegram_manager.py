@@ -1303,14 +1303,16 @@ class TelegramBotManager:
             target = parts[1].lower() if len(parts) > 1 else None
             sym_label = "Gold & Bitcoin" if not target else ("Gold" if "gold" in target or "xau" in target else "Bitcoin")
 
+            import train_model
+            candles_cnt, _ = train_model.get_history_candle_counts()
             bot.reply_to(
                 message,
                 f"🧠 <b>Initiating AI Self-Learning Engine for {sym_label}...</b>\n\n"
-                "• Pulling freshest 40,000 candles from MetaTrader 5\n"
+                f"• Pulling freshest {candles_cnt:,} candles from MetaTrader 5\n"
                 "• Simulating every setup (SL, breakeven, TP, spread costs)\n"
                 "• Purged walk-forward validation (slow vs fast trend filter)\n"
                 "• Picking cutoff on out-of-sample results only\n\n"
-                "<i>This runs in background (~1–3 min). You will receive an alert once complete!</i>"
+                "<i>This runs in background (~3–5 min). You will receive an alert once complete!</i>"
             )
 
             def _worker():

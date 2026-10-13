@@ -18,7 +18,8 @@ from train_model import (
 
 def test_configurable_history_defaults_and_env_override(monkeypatch):
     """Verifies default candle history and environment variable overrides."""
-    # Ensure env vars are clean
+    # Ensure env vars are clean and config file path is isolated to test defaults
+    monkeypatch.setattr("train_model.CONFIG_FILE_PATH", "non_existent_config.json")
     monkeypatch.delenv("CANDLES_LOW", raising=False)
     monkeypatch.delenv("CANDLES_HIGH", raising=False)
 

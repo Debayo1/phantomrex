@@ -70,6 +70,13 @@ def prepare_indicators(df_low: pd.DataFrame, df_high: pd.DataFrame, trend_mode: 
     df_high["time"] = df_high["time"].astype("datetime64[ns]")
     df_low["time"] = df_low["time"].astype("datetime64[ns]")
 
+    # Rule G1 Trend Alignment Guard:
+    # Every M5 bar needs a closed H1 bar before it.
+    # If the H1 history starts later than the oldest M5 bar, drop older M5 bars.
+    min_h1_time = df_high["time"].min()
+    if pd.notna(min_h1_time):
+        df_low = df_low[df_low["time"] >= min_h1_time].copy()
+
     # --- M5 Micro & Volatility Indicators ---
     df_low["m5_ema9"] = ta.trend.EMAIndicator(df_low["close"], window=9).ema_indicator()
     df_low["m5_ema21"] = ta.trend.EMAIndicator(df_low["close"], window=21).ema_indicator()
