@@ -765,7 +765,13 @@ def run_retrain_task(target_symbol=None):
         sym = cfg["name"]
         if target_symbol:
             clean_target = target_symbol.upper().rstrip("M").rstrip("C")
-            if clean_target not in sym.upper():
+            if "GOLD" in clean_target or "XAU" in clean_target:
+                match = "XAU" in sym.upper()
+            elif "BTC" in clean_target or "BITCOIN" in clean_target:
+                match = "BTC" in sym.upper()
+            else:
+                match = clean_target in sym.upper()
+            if not match:
                 continue
         res = train_single_asset(cfg)
         if res and res.get("success"):
