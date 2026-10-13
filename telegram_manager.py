@@ -14,7 +14,7 @@ from telebot import types
 import MetaTrader5 as mt5
 import numpy as np
 import joblib
-from datetime import datetime
+from datetime import datetime, timedelta
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
