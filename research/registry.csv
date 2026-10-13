@@ -1,0 +1,17 @@
+date,variant,params,dev_result,pass_fail
+2026-10-13 14:58:32,V0_XAUUSDm,M5/H1_BE=0.9_TP=1.8,"Gross=+0.015R,Net=-0.045R,t=-1.33",FAIL (no edge without AI)
+2026-10-13 14:58:42,V0_BTCUSDm,M5/H1_BE=0.9_TP=1.8,"Gross=+0.024R,Net=-0.106R,t=-4.82",FAIL (no edge without AI)
+2026-10-13 14:58:53,V1_XAUUSDm,M5/H1_BE=None_TP=1.8,"Gross=-0.007R,Net=-0.066R,t=-1.04",FAIL (no edge without AI)
+2026-10-13 14:59:04,V1_BTCUSDm,M5/H1_BE=None_TP=1.8,"Gross=-0.000R,Net=-0.131R,t=-4.14",FAIL (no edge without AI)
+2026-10-13 14:59:14,V2_XAUUSDm,M5/H1_BE=1.5_TP=1.8,"Gross=-0.008R,Net=-0.067R,t=-1.30",FAIL (no edge without AI)
+2026-10-13 14:59:25,V2_BTCUSDm,M5/H1_BE=1.5_TP=1.8,"Gross=+0.016R,Net=-0.115R,t=-4.35",FAIL (no edge without AI)
+2026-10-13 14:59:36,V3_XAUUSDm,M5/H1_BE=None_TP=1.2,"Gross=-0.018R,Net=-0.077R,t=-2.22",FAIL (no edge without AI)
+2026-10-13 14:59:46,V3_BTCUSDm,M5/H1_BE=None_TP=1.2,"Gross=+0.033R,Net=-0.098R,t=-3.78",FAIL (no edge without AI)
+2026-10-13 14:59:56,V4_XAUUSDm,M5/H1_BE=None_TP=2.5,"Gross=+0.004R,Net=-0.055R,t=-0.85",FAIL (no edge without AI)
+2026-10-13 15:00:07,V4_BTCUSDm,M5/H1_BE=None_TP=2.5,"Gross=+0.004R,Net=-0.127R,t=-2.79",FAIL (no edge without AI)
+2026-10-13 15:00:11,V5_XAUUSDm,M15/H1_BE=0.9_TP=1.8,"Gross=-0.001R,Net=-0.035R,t=-0.13",FAIL (no edge without AI)
+2026-10-13 15:00:15,V5_BTCUSDm,M15/H1_BE=0.9_TP=1.8,"Gross=+0.041R,Net=-0.030R,t=-1.76",FAIL (no edge without AI)
+2026-10-13 15:00:20,V6_XAUUSDm,H1/H4_BE=0.9_TP=1.8,"AI_Net=+0.196R,th_t=+1.76,folds=4/5,trades=171",FAIL
+2026-10-13 15:00:25,V6_BTCUSDm,H1/H4_BE=0.9_TP=1.8,"AI_Net=+0.144R,th_t=+1.12,folds=3/5,trades=51",FAIL
+2026-10-13 15:00:30,V7_XAUUSDm,H1/H4_BE=None_TP=1.8,"AI_Net=+0.200R,th_t=+2.00,folds=4/5,trades=124",FAIL
+2026-10-13 15:00:35,V7_BTCUSDm,H1/H4_BE=None_TP=1.8,"AI_Net=+0.083R,th_t=+0.54,folds=3/5,trades=104",FAIL

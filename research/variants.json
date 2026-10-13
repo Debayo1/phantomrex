@@ -1,0 +1,66 @@
+{
+  "V0": {
+    "name": "Current Strategy Control (BE 0.9R, TP 1.8R)",
+    "entry_tf": "M5",
+    "trend_tf": "H1",
+    "be_trigger_r": 0.9,
+    "tp_r": 1.8,
+    "description": "Baseline control: M5 entries with H1 trend, breakeven at 0.9R, TP 1.8R"
+  },
+  "V1": {
+    "name": "No Breakeven, TP 1.8R",
+    "entry_tf": "M5",
+    "trend_tf": "H1",
+    "be_trigger_r": null,
+    "tp_r": 1.8,
+    "description": "M5 entries with H1 trend, no breakeven, TP 1.8R"
+  },
+  "V2": {
+    "name": "Breakeven at 1.5R, TP 1.8R",
+    "entry_tf": "M5",
+    "trend_tf": "H1",
+    "be_trigger_r": 1.5,
+    "tp_r": 1.8,
+    "description": "M5 entries with H1 trend, breakeven at 1.5R, TP 1.8R"
+  },
+  "V3": {
+    "name": "No Breakeven, TP 1.2R",
+    "entry_tf": "M5",
+    "trend_tf": "H1",
+    "be_trigger_r": null,
+    "tp_r": 1.2,
+    "description": "M5 entries with H1 trend, no breakeven, TP 1.2R"
+  },
+  "V4": {
+    "name": "No Breakeven, TP 2.5R",
+    "entry_tf": "M5",
+    "trend_tf": "H1",
+    "be_trigger_r": null,
+    "tp_r": 2.5,
+    "description": "M5 entries with H1 trend, no breakeven, TP 2.5R"
+  },
+  "V5": {
+    "name": "M15 Entries with H1 Trend, V0 Exits",
+    "entry_tf": "M15",
+    "trend_tf": "H1",
+    "be_trigger_r": 0.9,
+    "tp_r": 1.8,
+    "description": "M15 entries with H1 trend filter, breakeven at 0.9R, TP 1.8R"
+  },
+  "V6": {
+    "name": "H1 Entries with H4 Trend, V0 Exits",
+    "entry_tf": "H1",
+    "trend_tf": "H4",
+    "be_trigger_r": 0.9,
+    "tp_r": 1.8,
+    "description": "H1 entries with H4 trend filter, breakeven at 0.9R, TP 1.8R"
+  },
+  "V7": {
+    "name": "H1 Entries with H4 Trend, No Breakeven, TP 1.8R",
+    "entry_tf": "H1",
+    "trend_tf": "H4",
+    "be_trigger_r": null,
+    "tp_r": 1.8,
+    "description": "H1 entries with H4 trend filter, no breakeven, TP 1.8R"
+  }
+}
