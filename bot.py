@@ -661,11 +661,14 @@ def check_daily_loss_guard(force=False):
 
         setup_pnl = {}
         day_net = 0.0
+        reset_time = float(tg_manager.settings.get("daily_guard_reset_time", 0.0))
         for d in deals:
             if d.entry not in (mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_OUT_BY):
                 continue
             if datetime.fromtimestamp(d.time, timezone.utc).date() != server_day:
                 continue
+            if d.time <= reset_time:
+                continue  # Skipped by manual owner reset
             o = opens.get(d.position_id)
             magic = o[0] if o else d.magic
             if not _is_bot_magic(magic):

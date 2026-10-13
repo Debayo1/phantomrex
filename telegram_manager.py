@@ -416,6 +416,7 @@ class TelegramBotManager:
                 types.BotCommand("restart", "Restart bot engine & reload source code"),
                 types.BotCommand("update", "Pull latest code updates from GitHub"),
                 types.BotCommand("news", "View upcoming high-impact economic news"),
+                types.BotCommand("resetguard", "Reset the daily loss guard circuit breaker (GOD only)"),
                 types.BotCommand("help", "Help & command documentation")
             ]
             self.bot.set_my_commands(commands)
@@ -1037,7 +1038,12 @@ class TelegramBotManager:
             types.InlineKeyboardButton("💰 Switch Live", callback_data="cfg_acc_live")
         )
 
-        # 6. Action buttons
+        # 6. Safety & Reset buttons
+        markup.row(
+            types.InlineKeyboardButton("🔓 Reset Daily Loss Guard", callback_data="cfg_reset_guard")
+        )
+
+        # 7. Action buttons
         markup.row(
             types.InlineKeyboardButton("🔑 Set AI Key", callback_data="cfg_ask_gemini"),
             types.InlineKeyboardButton("🔄 Restart Bot", callback_data="cfg_restart"),
@@ -1438,6 +1444,26 @@ class TelegramBotManager:
             )
             self.trigger_restart(delay=1.5)
 
+        # --- /resetguard ---
+        @bot.message_handler(commands=["resetguard"])
+        def handle_reset_guard(message):
+            cid = message.chat.id
+            if not self.is_authorized(cid):
+                return
+            if not self.is_god(cid):
+                bot.reply_to(message, "⛔ <b>Unauthorized:</b> Only Supreme Master (GOD) can reset the loss guard.")
+                return
+
+            self.settings["daily_guard_reset_time"] = time.time()
+            self.config["settings"] = self.settings
+            save_config(self.config)
+            bot.reply_to(
+                message,
+                "🔓 <b>Daily Loss Guard Reset!</b>\n\n"
+                "• All prior losses for today have been cleared from the circuit breaker.\n"
+                "• The bot is now unlocked and scanning for new high-confidence setups!"
+            )
+
         # --- /update ---
         @bot.message_handler(commands=["update"])
         def handle_update(message):
@@ -1760,6 +1786,21 @@ class TelegramBotManager:
                     save_config(self.config)
                     bot.answer_callback_query(call.id, f"🛑 Max Daily Losses set to {val}")
                     text, markup = self.build_settings_card(chat_id=cid)
+                    bot.edit_message_text(text, cid, mid, reply_markup=markup, parse_mode="HTML")
+                except Exception:
+                    pass
+
+            # 7. Reset Daily Loss Guard (Owner GOD only)
+            elif data == "cfg_reset_guard":
+                if not self.is_god(cid):
+                    bot.answer_callback_query(call.id, "⛔ Only Supreme Master (GOD) can reset the loss guard.", show_alert=True)
+                    return
+                self.settings["daily_guard_reset_time"] = time.time()
+                self.config["settings"] = self.settings
+                save_config(self.config)
+                bot.answer_callback_query(call.id, "🔓 Daily Loss Guard reset! Prior losses cleared for today.")
+                text, markup = self.build_settings_card(chat_id=cid)
+                try:
                     bot.edit_message_text(text, cid, mid, reply_markup=markup, parse_mode="HTML")
                 except Exception:
                     pass
