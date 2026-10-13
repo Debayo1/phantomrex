@@ -1478,7 +1478,8 @@ class TelegramBotManager:
 
             allowed_files = [
                 "bot.py", "train_model.py", "ai_features.py",
-                "telegram_manager.py", "news_filter.py", "telegram_config.json"
+                "telegram_manager.py", "news_filter.py", "telegram_config.json",
+                "model_promotion.py", "db_ledger.py"
             ]
 
             if fname not in allowed_files:
