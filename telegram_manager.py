@@ -1445,18 +1445,49 @@ class TelegramBotManager:
             git_dir = os.path.join(project_dir, ".git")
 
             if not os.path.exists(git_dir):
-                bot.reply_to(message, "ℹ️ <b>Git repository not linked on this server.</b>")
+                bot.reply_to(
+                    message,
+                    "ℹ️ <b>Git repository not linked on this server (.git folder missing).</b>\n\n"
+                    "You can update files directly by sending them as document attachments to this chat!"
+                )
                 return
 
-            bot.reply_to(message, "📥 <b>Checking for updates...</b>")
+            git_bin = shutil.which("git")
+            if not git_bin:
+                candidates = [
+                    r"C:\Program Files\Git\cmd\git.exe",
+                    r"C:\Program Files\Git\bin\git.exe",
+                    r"C:\Program Files (x86)\Git\cmd\git.exe",
+                    r"C:\Program Files (x86)\Git\bin\git.exe",
+                    os.path.expandvars(r"%LOCALAPPDATA%\Programs\Git\cmd\git.exe"),
+                    os.path.expandvars(r"%USERPROFILE%\AppData\Local\Programs\Git\cmd\git.exe"),
+                ]
+                for c in candidates:
+                    if os.path.exists(c):
+                        git_bin = c
+                        break
+
+            if not git_bin:
+                bot.reply_to(
+                    message,
+                    "⚠️ <b>Git is not installed on this VPS!</b> (WinError 2)\n\n"
+                    "• The <code>git.exe</code> executable was not found on your VPS PATH.\n"
+                    "• <b>Option 1:</b> Install Git on your VPS from https://git-scm.com/download/win\n"
+                    "• <b>Option 2:</b> Send any updated <code>.py</code> file directly to this chat to update it instantly!"
+                )
+                return
+
+            bot.reply_to(message, "📥 <b>Checking for updates from GitHub...</b>")
             try:
-                res = subprocess.run(["git", "pull"], cwd=project_dir, capture_output=True, text=True, timeout=30)
+                res = subprocess.run([git_bin, "pull"], cwd=project_dir, capture_output=True, text=True, timeout=30)
                 out = (res.stdout + res.stderr).strip()
                 if "Already up to date" in out:
                     bot.reply_to(message, "✅ <b>System is already up to date.</b>")
-                else:
-                    bot.reply_to(message, "🎉 <b>Update downloaded!</b>\n\n🔄 Restarting engine now...")
+                elif res.returncode == 0:
+                    bot.reply_to(message, f"🎉 <b>Update downloaded!</b>\n\n<pre>{out[:300]}</pre>\n\n🔄 Restarting engine now...")
                     self.trigger_restart(delay=2.0)
+                else:
+                    bot.reply_to(message, f"⚠️ <b>Git pull reported an issue:</b>\n\n<pre>{out[:400]}</pre>")
             except Exception as ex:
                 bot.reply_to(message, f"❌ Update error: {ex}")
 
