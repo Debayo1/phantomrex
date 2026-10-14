@@ -1,66 +1,91 @@
 {
   "V0": {
-    "name": "Current Strategy Control (BE 0.9R, TP 1.8R)",
+    "name": "Current Strategy Control (M5, H1 Trend, BE 0.9R, TP 1.8R)",
     "entry_tf": "M5",
     "trend_tf": "H1",
+    "strategy_type": "ema_pullback",
+    "stop_atr_mult": 1.5,
     "be_trigger_r": 0.9,
     "tp_r": 1.8,
-    "description": "Baseline control: M5 entries with H1 trend, breakeven at 0.9R, TP 1.8R"
+    "symbols": ["XAUUSDm", "BTCUSDm"],
+    "description": "Control: M5 EMA9/21 cross/pullback, H1 trend, current filters, BE 0.9R, TP 1.8R"
   },
   "V1": {
-    "name": "No Breakeven, TP 1.8R",
-    "entry_tf": "M5",
-    "trend_tf": "H1",
-    "be_trigger_r": null,
-    "tp_r": 1.8,
-    "description": "M5 entries with H1 trend, no breakeven, TP 1.8R"
-  },
-  "V2": {
-    "name": "Breakeven at 1.5R, TP 1.8R",
-    "entry_tf": "M5",
-    "trend_tf": "H1",
-    "be_trigger_r": 1.5,
-    "tp_r": 1.8,
-    "description": "M5 entries with H1 trend, breakeven at 1.5R, TP 1.8R"
-  },
-  "V3": {
-    "name": "No Breakeven, TP 1.2R",
-    "entry_tf": "M5",
-    "trend_tf": "H1",
-    "be_trigger_r": null,
-    "tp_r": 1.2,
-    "description": "M5 entries with H1 trend, no breakeven, TP 1.2R"
-  },
-  "V4": {
-    "name": "No Breakeven, TP 2.5R",
-    "entry_tf": "M5",
-    "trend_tf": "H1",
-    "be_trigger_r": null,
-    "tp_r": 2.5,
-    "description": "M5 entries with H1 trend, no breakeven, TP 2.5R"
-  },
-  "V5": {
-    "name": "M15 Entries with H1 Trend, V0 Exits",
+    "name": "M15 Scaled Control (M15, H1 Trend, No BE, TP 1.8R)",
     "entry_tf": "M15",
     "trend_tf": "H1",
-    "be_trigger_r": 0.9,
-    "tp_r": 1.8,
-    "description": "M15 entries with H1 trend filter, breakeven at 0.9R, TP 1.8R"
-  },
-  "V6": {
-    "name": "H1 Entries with H4 Trend, V0 Exits",
-    "entry_tf": "H1",
-    "trend_tf": "H4",
-    "be_trigger_r": 0.9,
-    "tp_r": 1.8,
-    "description": "H1 entries with H4 trend filter, breakeven at 0.9R, TP 1.8R"
-  },
-  "V7": {
-    "name": "H1 Entries with H4 Trend, No Breakeven, TP 1.8R",
-    "entry_tf": "H1",
-    "trend_tf": "H4",
+    "strategy_type": "ema_pullback",
+    "stop_atr_mult": 1.5,
     "be_trigger_r": null,
     "tp_r": 1.8,
-    "description": "H1 entries with H4 trend filter, no breakeven, TP 1.8R"
+    "symbols": ["XAUUSDm", "BTCUSDm"],
+    "description": "M15 entry logic with H1 trend filter, no breakeven, stop 1.5xATR14, TP 1.8R"
+  },
+  "V2": {
+    "name": "H1 Scaled Control (H1, H4 Trend, No BE, TP 1.8R)",
+    "entry_tf": "H1",
+    "trend_tf": "H4",
+    "strategy_type": "ema_pullback",
+    "stop_atr_mult": 1.5,
+    "be_trigger_r": null,
+    "tp_r": 1.8,
+    "symbols": ["XAUUSDm", "BTCUSDm"],
+    "description": "H1 entry logic with H4 trend filter, no breakeven, stop 1.5xATR14, TP 1.8R"
+  },
+  "V3": {
+    "name": "H1 20-Bar Breakout (H1, H4 Trend EMA50, No BE, TP 2.5R)",
+    "entry_tf": "H1",
+    "trend_tf": "H4",
+    "strategy_type": "donchian_breakout",
+    "channel_period": 20,
+    "stop_atr_mult": 1.5,
+    "be_trigger_r": null,
+    "tp_r": 2.5,
+    "symbols": ["XAUUSDm", "BTCUSDm"],
+    "description": "H1 breakout of 20-bar High/Low in direction of H4 close vs EMA50, stop 1.5xATR14, TP 2.5R, no BE"
+  },
+  "V4": {
+    "name": "H4 20-Bar Breakout (H4, D1 Trend EMA50, No BE, TP 3.0R)",
+    "entry_tf": "H4",
+    "trend_tf": "D1",
+    "strategy_type": "donchian_breakout",
+    "channel_period": 20,
+    "stop_atr_mult": 2.0,
+    "be_trigger_r": null,
+    "tp_r": 3.0,
+    "symbols": ["XAUUSDm", "BTCUSDm"],
+    "description": "H4 breakout of 20-bar High/Low in direction of D1 close vs EMA50, stop 2.0xATR14, TP 3.0R, no BE"
+  },
+  "V5": {
+    "name": "Session-Open Breakout (M15, 00-07 UTC Range, XAUUSDm ONLY)",
+    "entry_tf": "M15",
+    "trend_tf": null,
+    "strategy_type": "session_breakout",
+    "range_start_utc": "00:00",
+    "range_end_utc": "07:00",
+    "entry_start_utc": "07:00",
+    "entry_end_utc": "11:00",
+    "close_time_utc": "16:00",
+    "stop_min_atr": 1.0,
+    "stop_max_atr": 3.0,
+    "tp_r": 1.5,
+    "max_trades_per_day": 1,
+    "symbols": ["XAUUSDm"],
+    "description": "Session breakout: 00-07 UTC range, enter 07-11 UTC on M15 close beyond range, stop opposite range clamped to [1,3]xATR, TP 1.5R, time exit 16:00 UTC, max 1 trade/day"
+  },
+  "V6": {
+    "name": "H1 Mean Reversion (RSI14 < 30 / > 70, ADX14 < 20, TP 1.0R)",
+    "entry_tf": "H1",
+    "trend_tf": null,
+    "strategy_type": "mean_reversion",
+    "rsi_period": 14,
+    "rsi_oversold": 30.0,
+    "rsi_overbought": 70.0,
+    "adx_filter": 20.0,
+    "stop_atr_mult": 1.5,
+    "tp_r": 1.0,
+    "time_exit_bars": 24,
+    "symbols": ["XAUUSDm", "BTCUSDm"],
+    "description": "H1 mean reversion: Buy RSI14<30, Sell RSI14>70 when H1 ADX14<20, stop 1.5xATR14, TP 1.0R, exit after 24 bars"
   }
 }
