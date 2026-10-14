@@ -1,60 +1,62 @@
-date,variant,params,dev_result,pass_fail
-2026-10-13 14:58:32,V0_XAUUSDm,M5/H1_BE=0.9_TP=1.8,"Gross=+0.015R,Net=-0.045R,t=-1.33",FAIL (no edge without AI)
-2026-10-13 14:58:42,V0_BTCUSDm,M5/H1_BE=0.9_TP=1.8,"Gross=+0.024R,Net=-0.106R,t=-4.82",FAIL (no edge without AI)
-2026-10-13 14:58:53,V1_XAUUSDm,M5/H1_BE=None_TP=1.8,"Gross=-0.007R,Net=-0.066R,t=-1.04",FAIL (no edge without AI)
-2026-10-13 14:59:04,V1_BTCUSDm,M5/H1_BE=None_TP=1.8,"Gross=-0.000R,Net=-0.131R,t=-4.14",FAIL (no edge without AI)
-2026-10-13 14:59:14,V2_XAUUSDm,M5/H1_BE=1.5_TP=1.8,"Gross=-0.008R,Net=-0.067R,t=-1.30",FAIL (no edge without AI)
-2026-10-13 14:59:25,V2_BTCUSDm,M5/H1_BE=1.5_TP=1.8,"Gross=+0.016R,Net=-0.115R,t=-4.35",FAIL (no edge without AI)
-2026-10-13 14:59:36,V3_XAUUSDm,M5/H1_BE=None_TP=1.2,"Gross=-0.018R,Net=-0.077R,t=-2.22",FAIL (no edge without AI)
-2026-10-13 14:59:46,V3_BTCUSDm,M5/H1_BE=None_TP=1.2,"Gross=+0.033R,Net=-0.098R,t=-3.78",FAIL (no edge without AI)
-2026-10-13 14:59:56,V4_XAUUSDm,M5/H1_BE=None_TP=2.5,"Gross=+0.004R,Net=-0.055R,t=-0.85",FAIL (no edge without AI)
-2026-10-13 15:00:07,V4_BTCUSDm,M5/H1_BE=None_TP=2.5,"Gross=+0.004R,Net=-0.127R,t=-2.79",FAIL (no edge without AI)
-2026-10-13 15:00:11,V5_XAUUSDm,M15/H1_BE=0.9_TP=1.8,"Gross=-0.001R,Net=-0.035R,t=-0.13",FAIL (no edge without AI)
-2026-10-13 15:00:15,V5_BTCUSDm,M15/H1_BE=0.9_TP=1.8,"Gross=+0.041R,Net=-0.030R,t=-1.76",FAIL (no edge without AI)
-2026-10-13 15:00:20,V6_XAUUSDm,H1/H4_BE=0.9_TP=1.8,"AI_Net=+0.196R,th_t=+1.76,folds=4/5,trades=171",FAIL
-2026-10-13 15:00:25,V6_BTCUSDm,H1/H4_BE=0.9_TP=1.8,"AI_Net=+0.144R,th_t=+1.12,folds=3/5,trades=51",FAIL
-2026-10-13 15:00:30,V7_XAUUSDm,H1/H4_BE=None_TP=1.8,"AI_Net=+0.200R,th_t=+2.00,folds=4/5,trades=124",FAIL
-2026-10-13 15:00:35,V7_BTCUSDm,H1/H4_BE=None_TP=1.8,"AI_Net=+0.083R,th_t=+0.54,folds=3/5,trades=104",FAIL
-2026-10-14 00:31:43,80k_history_test,80000M5_9000H1_XAUUSDm,"Holdout_Trades=20,Holdout_Net=-0.276R,Dev_AI_Net=+0.244R,th_t=+2.24,folds=5/5",FAIL (INSUFFICIENT_DATA: 20/30 trades)
-2026-10-14 00:32:08,80k_history_test,80000M5_9000H1_BTCUSDm,"Holdout_Trades=141,Holdout_Net=-0.206R,Dev_AI_Net=-0.018R,th_t=-0.30,folds=2/5",FAIL (no edge)
-2026-10-14 02:48:53,V0,XAUUSDm,M5/H1_TP=1.8R,"Net=-0.336R,th_t=-12.87,folds=0/5,trades=1992,status=FAIL"
-2026-10-14 02:48:56,V0,BTCUSDm,M5/H1_TP=1.8R,"Net=-0.101R,th_t=-3.93,folds=0/5,trades=1927,status=FAIL"
-2026-10-14 02:48:58,V1,XAUUSDm,M15/H1_TP=1.8R,"Net=-0.336R,th_t=-9.78,folds=0/5,trades=1394,status=FAIL"
-2026-10-14 02:49:01,V1,BTCUSDm,M15/H1_TP=1.8R,"Net=-0.026R,th_t=-0.75,folds=2/5,trades=1377,status=FAIL"
-2026-10-14 02:49:02,V2,XAUUSDm,H1/H4_TP=1.8R,"Net=-0.274R,th_t=-5.33,folds=0/5,trades=668,status=FAIL"
-2026-10-14 02:49:03,V2,BTCUSDm,H1/H4_TP=1.8R,"Net=-0.086R,th_t=-1.79,folds=2/5,trades=673,status=FAIL"
-2026-10-14 02:49:05,V3,XAUUSDm,H1/H4_TP=2.5R,"Net=-0.285R,th_t=-4.71,folds=1/5,trades=685,status=FAIL"
-2026-10-14 02:49:06,V3,BTCUSDm,H1/H4_TP=2.5R,"Net=+0.026R,th_t=+0.40,folds=4/5,trades=600,status=FAIL"
-2026-10-14 02:49:06,V4,XAUUSDm,H4/D1_TP=3.0R,"Net=-0.073R,th_t=-0.69,folds=2/5,trades=182,status=FAIL"
-2026-10-14 02:49:06,V4,BTCUSDm,H4/D1_TP=3.0R,"Net=+0.242R,th_t=+2.15,folds=5/5,trades=203,status=FAIL"
-2026-10-14 02:49:28,V5,XAUUSDm,M15/None_TP=1.5R,"Net=-0.179R,th_t=-2.74,folds=0/5,trades=316,status=FAIL"
-2026-10-14 02:49:29,V6,XAUUSDm,H1/None_TP=1.0R,"Net=-0.296R,th_t=-3.05,folds=0/5,trades=104,status=FAIL"
-2026-10-14 02:49:29,V6,BTCUSDm,H1/None_TP=1.0R,"Net=-0.278R,th_t=-2.60,folds=0/5,trades=85,status=INSUFFICIENT_DATA"
-2026-10-14 02:50:23,V0,XAUUSDm,M5/H1_TP=1.8R,"Net=-0.336R,th_t=-12.87,folds=0/5,trades=1992,status=FAIL"
-2026-10-14 02:50:27,V0,BTCUSDm,M5/H1_TP=1.8R,"Net=-0.101R,th_t=-3.93,folds=0/5,trades=1927,status=FAIL"
-2026-10-14 02:50:30,V1,XAUUSDm,M15/H1_TP=1.8R,"Net=-0.336R,th_t=-9.78,folds=0/5,trades=1394,status=FAIL"
-2026-10-14 02:50:33,V1,BTCUSDm,M15/H1_TP=1.8R,"Net=-0.026R,th_t=-0.75,folds=2/5,trades=1377,status=FAIL"
-2026-10-14 02:50:34,V2,XAUUSDm,H1/H4_TP=1.8R,"Net=-0.274R,th_t=-5.33,folds=0/5,trades=668,status=FAIL"
-2026-10-14 02:50:35,V2,BTCUSDm,H1/H4_TP=1.8R,"Net=-0.086R,th_t=-1.79,folds=2/5,trades=673,status=FAIL"
-2026-10-14 02:50:36,V3,XAUUSDm,H1/H4_TP=2.5R,"Net=-0.285R,th_t=-4.71,folds=1/5,trades=685,status=FAIL"
-2026-10-14 02:50:37,V3,BTCUSDm,H1/H4_TP=2.5R,"Net=+0.026R,th_t=+0.40,folds=4/5,trades=600,status=FAIL"
-2026-10-14 02:50:37,V4,XAUUSDm,H4/D1_TP=3.0R,"Net=-0.073R,th_t=-0.69,folds=2/5,trades=182,status=FAIL"
-2026-10-14 02:50:38,V4,BTCUSDm,H4/D1_TP=3.0R,"Net=+0.242R,th_t=+2.15,folds=5/5,trades=203,status=FAIL"
-2026-10-14 02:51:01,V5,XAUUSDm,M15/None_TP=1.5R,"Net=-0.179R,th_t=-2.74,folds=0/5,trades=316,status=FAIL"
-2026-10-14 02:51:02,V6,XAUUSDm,H1/None_TP=1.0R,"Net=-0.296R,th_t=-3.05,folds=0/5,trades=104,status=FAIL"
-2026-10-14 02:51:03,V6,BTCUSDm,H1/None_TP=1.0R,"Net=-0.278R,th_t=-2.60,folds=0/5,trades=85,status=INSUFFICIENT_DATA"
-2026-10-14 03:30:13,V0,XAUUSDm,M5/H1_TP=1.8R,"Net=-0.001R,th_t=-0.03,folds=3/5,trades=1992,status=FAIL"
-2026-10-14 03:30:16,V0,BTCUSDm,M5/H1_TP=1.8R,"Net=-0.101R,th_t=-3.93,folds=0/5,trades=1927,status=FAIL"
-2026-10-14 03:30:19,V1,XAUUSDm,M15/H1_TP=1.8R,"Net=-0.032R,th_t=-0.94,folds=1/5,trades=1394,status=FAIL"
-2026-10-14 03:30:22,V1,BTCUSDm,M15/H1_TP=1.8R,"Net=-0.026R,th_t=-0.75,folds=2/5,trades=1377,status=FAIL"
-2026-10-14 03:30:23,V2,XAUUSDm,H1/H4_TP=1.8R,"Net=+0.006R,th_t=+0.12,folds=3/5,trades=668,status=FAIL"
-2026-10-14 03:30:24,V2,BTCUSDm,H1/H4_TP=1.8R,"Net=-0.086R,th_t=-1.79,folds=2/5,trades=673,status=FAIL"
-2026-10-14 03:30:26,V3,XAUUSDm,H1/H4_TP=2.5R,"Net=-0.014R,th_t=-0.23,folds=2/5,trades=685,status=FAIL"
-2026-10-14 03:30:28,V3,BTCUSDm,H1/H4_TP=2.5R,"Net=+0.026R,th_t=+0.40,folds=4/5,trades=600,status=FAIL"
-2026-10-14 03:30:28,V4,XAUUSDm,H4/D1_TP=3.0R,"Net=+0.028R,th_t=+0.26,folds=2/5,trades=182,status=FAIL"
-2026-10-14 03:30:28,V4,BTCUSDm,H4/D1_TP=3.0R,"Net=+0.242R,th_t=+2.15,folds=5/5,trades=203,status=FAIL"
-2026-10-14 03:30:53,V5,XAUUSDm,M15/None_TP=1.5R,"Net=-0.008R,th_t=-0.12,folds=2/5,trades=316,status=FAIL"
-2026-10-14 03:30:54,V6,XAUUSDm,H1/None_TP=1.0R,"Net=-0.011R,th_t=-0.11,folds=2/5,trades=104,status=FAIL"
-2026-10-14 03:30:56,V6,BTCUSDm,H1/None_TP=1.0R,"Net=-0.278R,th_t=-2.60,folds=0/5,trades=85,status=INSUFFICIENT_DATA"
-2026-10-14 03:31:02,V7,XAUUSDm,M1_9amCR,"Net=+0.135R,th_t=+0.44,folds=3/5,trades=47,status=INSUFFICIENT_DATA"
-2026-10-14 03:31:09,V7,BTCUSDm,M1_9amCR,"Net=+0.361R,th_t=+0.61,folds=3/5,trades=46,status=INSUFFICIENT_DATA"
+date,batch,variant,symbol,params,result,note
+2026-10-13 14:58:32,exploratory,V0,XAUUSDm,M5/H1_BE=0.9_TP=1.8,"Gross=+0.015R,Net=-0.045R,t=-1.33, status=FAIL (no edge without AI)","exploratory, earlier variant definitions"
+2026-10-13 14:58:42,exploratory,V0,BTCUSDm,M5/H1_BE=0.9_TP=1.8,"Gross=+0.024R,Net=-0.106R,t=-4.82, status=FAIL (no edge without AI)","exploratory, earlier variant definitions"
+2026-10-13 14:58:53,exploratory,V1,XAUUSDm,M5/H1_BE=None_TP=1.8,"Gross=-0.007R,Net=-0.066R,t=-1.04, status=FAIL (no edge without AI)","exploratory, earlier variant definitions"
+2026-10-13 14:59:04,exploratory,V1,BTCUSDm,M5/H1_BE=None_TP=1.8,"Gross=-0.000R,Net=-0.131R,t=-4.14, status=FAIL (no edge without AI)","exploratory, earlier variant definitions"
+2026-10-13 14:59:14,exploratory,V2,XAUUSDm,M5/H1_BE=1.5_TP=1.8,"Gross=-0.008R,Net=-0.067R,t=-1.30, status=FAIL (no edge without AI)","exploratory, earlier variant definitions"
+2026-10-13 14:59:25,exploratory,V2,BTCUSDm,M5/H1_BE=1.5_TP=1.8,"Gross=+0.016R,Net=-0.115R,t=-4.35, status=FAIL (no edge without AI)","exploratory, earlier variant definitions"
+2026-10-13 14:59:36,exploratory,V3,XAUUSDm,M5/H1_BE=None_TP=1.2,"Gross=-0.018R,Net=-0.077R,t=-2.22, status=FAIL (no edge without AI)","exploratory, earlier variant definitions"
+2026-10-13 14:59:46,exploratory,V3,BTCUSDm,M5/H1_BE=None_TP=1.2,"Gross=+0.033R,Net=-0.098R,t=-3.78, status=FAIL (no edge without AI)","exploratory, earlier variant definitions"
+2026-10-13 14:59:56,exploratory,V4,XAUUSDm,M5/H1_BE=None_TP=2.5,"Gross=+0.004R,Net=-0.055R,t=-0.85, status=FAIL (no edge without AI)","exploratory, earlier variant definitions"
+2026-10-13 15:00:07,exploratory,V4,BTCUSDm,M5/H1_BE=None_TP=2.5,"Gross=+0.004R,Net=-0.127R,t=-2.79, status=FAIL (no edge without AI)","exploratory, earlier variant definitions"
+2026-10-13 15:00:11,exploratory,V5,XAUUSDm,M15/H1_BE=0.9_TP=1.8,"Gross=-0.001R,Net=-0.035R,t=-0.13, status=FAIL (no edge without AI)","exploratory, earlier variant definitions"
+2026-10-13 15:00:15,exploratory,V5,BTCUSDm,M15/H1_BE=0.9_TP=1.8,"Gross=+0.041R,Net=-0.030R,t=-1.76, status=FAIL (no edge without AI)","exploratory, earlier variant definitions"
+2026-10-13 15:00:20,exploratory,V6,XAUUSDm,H1/H4_BE=0.9_TP=1.8,"AI_Net=+0.196R,th_t=+1.76,folds=4/5,trades=171, status=FAIL","exploratory, earlier variant definitions"
+2026-10-13 15:00:25,exploratory,V6,BTCUSDm,H1/H4_BE=0.9_TP=1.8,"AI_Net=+0.144R,th_t=+1.12,folds=3/5,trades=51, status=FAIL","exploratory, earlier variant definitions"
+2026-10-13 15:00:30,exploratory,V7,XAUUSDm,H1/H4_BE=None_TP=1.8,"AI_Net=+0.200R,th_t=+2.00,folds=4/5,trades=124, status=FAIL","exploratory, earlier variant definitions"
+2026-10-13 15:00:35,exploratory,V7,BTCUSDm,H1/H4_BE=None_TP=1.8,"AI_Net=+0.083R,th_t=+0.54,folds=3/5,trades=104, status=FAIL","exploratory, earlier variant definitions"
+2026-10-14 00:31:43,exploratory,80k_history_test,XAUUSDm,80000M5_9000H1_XAUUSDm,"Holdout_Trades=20,Holdout_Net=-0.276R,Dev_AI_Net=+0.244R,th_t=+2.24,folds=5/5, status=FAIL (INSUFFICIENT_DATA: 20/30 trades)","exploratory, earlier variant definitions"
+2026-10-14 00:32:08,exploratory,80k_history_test,BTCUSDm,80000M5_9000H1_BTCUSDm,"Holdout_Trades=141,Holdout_Net=-0.206R,Dev_AI_Net=-0.018R,th_t=-0.30,folds=2/5, status=FAIL (no edge)","exploratory, earlier variant definitions"
+2026-10-14 02:48:53,batch_1,V0,XAUUSDm,M5/H1_TP=1.8R,"Net=-0.336R,th_t=-12.87,folds=0/5,trades=1992,status=FAIL",invalid (gold point bug)
+2026-10-14 02:48:56,batch_1,V0,BTCUSDm,M5/H1_TP=1.8R,"Net=-0.101R,th_t=-3.93,folds=0/5,trades=1927,status=FAIL",
+2026-10-14 02:48:58,batch_1,V1,XAUUSDm,M15/H1_TP=1.8R,"Net=-0.336R,th_t=-9.78,folds=0/5,trades=1394,status=FAIL",invalid (gold point bug)
+2026-10-14 02:49:01,batch_1,V1,BTCUSDm,M15/H1_TP=1.8R,"Net=-0.026R,th_t=-0.75,folds=2/5,trades=1377,status=FAIL",
+2026-10-14 02:49:02,batch_1,V2,XAUUSDm,H1/H4_TP=1.8R,"Net=-0.274R,th_t=-5.33,folds=0/5,trades=668,status=FAIL",invalid (gold point bug)
+2026-10-14 02:49:03,batch_1,V2,BTCUSDm,H1/H4_TP=1.8R,"Net=-0.086R,th_t=-1.79,folds=2/5,trades=673,status=FAIL",
+2026-10-14 02:49:05,batch_1,V3,XAUUSDm,H1/H4_TP=2.5R,"Net=-0.285R,th_t=-4.71,folds=1/5,trades=685,status=FAIL",invalid (gold point bug)
+2026-10-14 02:49:06,batch_1,V3,BTCUSDm,H1/H4_TP=2.5R,"Net=+0.026R,th_t=+0.40,folds=4/5,trades=600,status=FAIL",
+2026-10-14 02:49:06,batch_1,V4,XAUUSDm,H4/D1_TP=3.0R,"Net=-0.073R,th_t=-0.69,folds=2/5,trades=182,status=FAIL",invalid (gold point bug)
+2026-10-14 02:49:06,batch_1,V4,BTCUSDm,H4/D1_TP=3.0R,"Net=+0.242R,th_t=+2.15,folds=5/5,trades=203,status=FAIL",
+2026-10-14 02:49:28,batch_1,V5,XAUUSDm,M15/None_TP=1.5R,"Net=-0.179R,th_t=-2.74,folds=0/5,trades=316,status=FAIL",invalid (gold point bug)
+2026-10-14 02:49:29,batch_1,V6,XAUUSDm,H1/None_TP=1.0R,"Net=-0.296R,th_t=-3.05,folds=0/5,trades=104,status=FAIL",invalid (gold point bug)
+2026-10-14 02:49:29,batch_1,V6,BTCUSDm,H1/None_TP=1.0R,"Net=-0.278R,th_t=-2.60,folds=0/5,trades=85,status=INSUFFICIENT_DATA",
+2026-10-14 02:50:23,batch_1_dup,V0,XAUUSDm,M5/H1_TP=1.8R,"Net=-0.336R,th_t=-12.87,folds=0/5,trades=1992,status=FAIL",invalid (gold point bug); duplicate of 02:48
+2026-10-14 02:50:27,batch_1_dup,V0,BTCUSDm,M5/H1_TP=1.8R,"Net=-0.101R,th_t=-3.93,folds=0/5,trades=1927,status=FAIL",duplicate of 02:48
+2026-10-14 02:50:30,batch_1_dup,V1,XAUUSDm,M15/H1_TP=1.8R,"Net=-0.336R,th_t=-9.78,folds=0/5,trades=1394,status=FAIL",invalid (gold point bug); duplicate of 02:48
+2026-10-14 02:50:33,batch_1_dup,V1,BTCUSDm,M15/H1_TP=1.8R,"Net=-0.026R,th_t=-0.75,folds=2/5,trades=1377,status=FAIL",duplicate of 02:48
+2026-10-14 02:50:34,batch_1_dup,V2,XAUUSDm,H1/H4_TP=1.8R,"Net=-0.274R,th_t=-5.33,folds=0/5,trades=668,status=FAIL",invalid (gold point bug); duplicate of 02:48
+2026-10-14 02:50:35,batch_1_dup,V2,BTCUSDm,H1/H4_TP=1.8R,"Net=-0.086R,th_t=-1.79,folds=2/5,trades=673,status=FAIL",duplicate of 02:48
+2026-10-14 02:50:36,batch_1_dup,V3,XAUUSDm,H1/H4_TP=2.5R,"Net=-0.285R,th_t=-4.71,folds=1/5,trades=685,status=FAIL",invalid (gold point bug); duplicate of 02:48
+2026-10-14 02:50:37,batch_1_dup,V3,BTCUSDm,H1/H4_TP=2.5R,"Net=+0.026R,th_t=+0.40,folds=4/5,trades=600,status=FAIL",duplicate of 02:48
+2026-10-14 02:50:37,batch_1_dup,V4,XAUUSDm,H4/D1_TP=3.0R,"Net=-0.073R,th_t=-0.69,folds=2/5,trades=182,status=FAIL",invalid (gold point bug); duplicate of 02:48
+2026-10-14 02:50:38,batch_1_dup,V4,BTCUSDm,H4/D1_TP=3.0R,"Net=+0.242R,th_t=+2.15,folds=5/5,trades=203,status=FAIL",duplicate of 02:48
+2026-10-14 02:51:01,batch_1_dup,V5,XAUUSDm,M15/None_TP=1.5R,"Net=-0.179R,th_t=-2.74,folds=0/5,trades=316,status=FAIL",invalid (gold point bug); duplicate of 02:48
+2026-10-14 02:51:02,batch_1_dup,V6,XAUUSDm,H1/None_TP=1.0R,"Net=-0.296R,th_t=-3.05,folds=0/5,trades=104,status=FAIL",invalid (gold point bug); duplicate of 02:48
+2026-10-14 02:51:03,batch_1_dup,V6,BTCUSDm,H1/None_TP=1.0R,"Net=-0.278R,th_t=-2.60,folds=0/5,trades=85,status=INSUFFICIENT_DATA",duplicate of 02:48
+2026-10-14 03:30:13,batch_2,V0,XAUUSDm,M5/H1_TP=1.8R,"Net=-0.001R,th_t=-0.03,folds=3/5,trades=1992,status=FAIL",
+2026-10-14 03:30:16,batch_2,V0,BTCUSDm,M5/H1_TP=1.8R,"Net=-0.101R,th_t=-3.93,folds=0/5,trades=1927,status=FAIL",
+2026-10-14 03:30:19,batch_2,V1,XAUUSDm,M15/H1_TP=1.8R,"Net=-0.032R,th_t=-0.94,folds=1/5,trades=1394,status=FAIL",
+2026-10-14 03:30:22,batch_2,V1,BTCUSDm,M15/H1_TP=1.8R,"Net=-0.026R,th_t=-0.75,folds=2/5,trades=1377,status=FAIL",
+2026-10-14 03:30:23,batch_2,V2,XAUUSDm,H1/H4_TP=1.8R,"Net=+0.006R,th_t=+0.12,folds=3/5,trades=668,status=FAIL",
+2026-10-14 03:30:24,batch_2,V2,BTCUSDm,H1/H4_TP=1.8R,"Net=-0.086R,th_t=-1.79,folds=2/5,trades=673,status=FAIL",
+2026-10-14 03:30:26,batch_2,V3,XAUUSDm,H1/H4_TP=2.5R,"Net=-0.014R,th_t=-0.23,folds=2/5,trades=685,status=FAIL",
+2026-10-14 03:30:28,batch_2,V3,BTCUSDm,H1/H4_TP=2.5R,"Net=+0.026R,th_t=+0.40,folds=4/5,trades=600,status=FAIL",
+2026-10-14 03:30:28,batch_2,V4,XAUUSDm,H4/D1_TP=3.0R,"Net=+0.028R,th_t=+0.26,folds=2/5,trades=182,status=FAIL",
+2026-10-14 03:30:28,batch_2,V4,BTCUSDm,H4/D1_TP=3.0R,"Net=+0.242R,th_t=+2.15,folds=5/5,trades=203,status=FAIL",
+2026-10-14 03:30:53,batch_2,V5,XAUUSDm,M15/None_TP=1.5R,"Net=-0.008R,th_t=-0.12,folds=2/5,trades=316,status=FAIL",
+2026-10-14 03:30:54,batch_2,V6,XAUUSDm,H1/None_TP=1.0R,"Net=-0.011R,th_t=-0.11,folds=2/5,trades=104,status=FAIL",
+2026-10-14 03:30:56,batch_2,V6,BTCUSDm,H1/None_TP=1.0R,"Net=-0.278R,th_t=-2.60,folds=0/5,trades=85,status=INSUFFICIENT_DATA",
+2026-10-14 03:31:02,batch_2,V7,XAUUSDm,M1_9amCR,"Net=+0.135R,th_t=+0.44,folds=3/5,trades=47,status=INSUFFICIENT_DATA",
+2026-10-14 03:31:09,batch_2,V7,BTCUSDm,M1_9amCR,"Net=+0.361R,th_t=+0.61,folds=3/5,trades=46,status=INSUFFICIENT_DATA",
+2026-10-14 03:59:57,v7_fix,V7,XAUUSDm,M1_9amCR,"Net=+0.135R,th_t=+0.44,folds=3/5,trades=47,status=INSUFFICIENT_DATA",V7 rerun after implementation fix (not a new variant)
+2026-10-14 04:00:04,v7_fix,V7,BTCUSDm,M1_9amCR,"Net=+0.361R,th_t=+0.61,folds=3/5,trades=46,status=INSUFFICIENT_DATA",V7 rerun after implementation fix (not a new variant)

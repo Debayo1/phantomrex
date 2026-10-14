@@ -226,9 +226,9 @@ def test_registry_count_increases_for_every_run(tmp_path, monkeypatch):
     with open(test_reg_file, "r", encoding="utf-8") as f:
         reader = list(csv.reader(f))
         assert len(reader) == 4  # Header + 3 rows
-        assert "FAIL" in reader[1][4]
-        assert "INSUFFICIENT_DATA" in reader[2][4]
-        assert "PASS" in reader[3][4]
+        assert "FAIL" in reader[1][5]
+        assert "INSUFFICIENT_DATA" in reader[2][5]
+        assert "PASS" in reader[3][5]
 
 
 def test_variants_json_max_eight_pre_registered():

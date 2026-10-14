@@ -81,14 +81,14 @@ def ensure_registry_initialized():
         os.makedirs(RESEARCH_DIR, exist_ok=True)
         with open(REGISTRY_FILE, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["date", "variant", "symbol", "params", "result"])
+            writer.writerow(["date", "batch", "variant", "symbol", "params", "result", "note"])
 
 
-def log_to_registry(variant, arg2, arg3, arg4=None):
+def log_to_registry(variant, arg2, arg3, arg4=None, batch="", note=""):
     """
     Logs an attempt to research/registry.csv (H1).
     Flexible signature:
-      log_to_registry(variant, symbol, params, result)
+      log_to_registry(variant, symbol, params, result, batch="", note="")
       OR log_to_registry(variant, params, result, pass_fail) [legacy test compatibility]
     """
     ensure_registry_initialized()
@@ -96,7 +96,7 @@ def log_to_registry(variant, arg2, arg3, arg4=None):
 
     if arg4 is not None:
         # Check if arg2 is a symbol or params
-        if any(sym["name"] in str(arg2) for sym in TARGET_SYMBOLS) or "TEST" in str(variant):
+        if any(sym["name"] in str(arg2) for sym in TARGET_SYMBOLS) or "TEST" in str(variant) or "BTC" in str(arg2) or "XAU" in str(arg2):
             symbol = str(arg2)
             params = str(arg3)
             result = str(arg4)
@@ -111,7 +111,7 @@ def log_to_registry(variant, arg2, arg3, arg4=None):
 
     with open(REGISTRY_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow([today_str, variant, symbol, params, result])
+        writer.writerow([today_str, batch, variant, symbol, params, result, note])
 
 
 def get_registry_count():
@@ -1004,18 +1004,18 @@ def simulate_v7_cr_model(df_m1, sym_cfg):
             ifvg_confirmed = False
             fvg_lookback_start = max(2, i - 30)
 
-            for k in range(fvg_lookback_start, i + 1):
+            for k in range(fvg_lookback_start, i):
                 if direction == -1:
                     if float(day_df.loc[k-2, "high"]) < float(day_df.loc[k, "low"]):
                         fvg_level = float(day_df.loc[k-2, "high"])
-                        closes_sub = day_df.loc[k:i, "close"].astype(float)
+                        closes_sub = day_df.loc[k+1:i, "close"].astype(float)
                         if (closes_sub < fvg_level).any():
                             ifvg_confirmed = True
                             break
                 else:
                     if float(day_df.loc[k-2, "low"]) > float(day_df.loc[k, "high"]):
                         fvg_level = float(day_df.loc[k-2, "low"])
-                        closes_sub = day_df.loc[k:i, "close"].astype(float)
+                        closes_sub = day_df.loc[k+1:i, "close"].astype(float)
                         if (closes_sub > fvg_level).any():
                             ifvg_confirmed = True
                             break
@@ -1076,13 +1076,15 @@ def simulate_v7_cr_model(df_m1, sym_cfg):
         spread_price = max(spread_pts * point, spread_est)
         cost_price = spread_price * (1.0 + slippage_frac)
 
-        # Stop loss calculation:
+        # Stop loss calculation (strictly closed bars t_idx through signal bar i, plus entry open price - NO LOOKAHEAD):
         if d == -1:
-            extreme = float(day_df.loc[t_idx:e_idx, "high"].max())
+            hist_high = float(day_df.loc[t_idx:trade_signal["signal_bar"], "high"].max())
+            extreme = max(hist_high, entry_price)
             sl = extreme + spread_price
             stop_dist = sl - entry_price
         else:
-            extreme = float(day_df.loc[t_idx:e_idx, "low"].min())
+            hist_low = float(day_df.loc[t_idx:trade_signal["signal_bar"], "low"].min())
+            extreme = min(hist_low, entry_price)
             sl = extreme - spread_price
             stop_dist = entry_price - sl
 
@@ -1153,6 +1155,11 @@ def simulate_v7_cr_model(df_m1, sym_cfg):
             "exit_bar": exit_bar,
             "entry_time": entry_time,
             "exit_time": exit_time,
+            "touch_time": pd.Timestamp(day_df.loc[t_idx, "time"]),
+            "touch_bar": t_idx,
+            "touch_side": "HIGH" if d == -1 else "LOW",
+            "h_ref": h_ref,
+            "l_ref": l_ref,
             "dir": d,
             "entry_price": entry_price,
             "exit_price": exit_price,
