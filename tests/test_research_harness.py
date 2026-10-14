@@ -232,13 +232,13 @@ def test_registry_count_increases_for_every_run(tmp_path, monkeypatch):
 
 
 def test_variants_json_max_eight_pre_registered():
-    """H7.6: Verify variants.json exists, defines the 7 variants V0-V6, and keeps slot 7 empty."""
+    """H7.6: Verify variants.json exists, defines the 8 variants V0-V7 (cap full)."""
     assert os.path.exists(VARIANTS_FILE)
     import json
     with open(VARIANTS_FILE, "r", encoding="utf-8") as f:
         variants = json.load(f)
 
-    # Maximum 8 variants total, exactly 7 registered (V0 through V6)
+    # Maximum 8 variants total, exactly 8 registered (V0 through V7, cap is full)
     assert len(variants) <= 8, f"Too many variants! Found {len(variants)}, max allowed is 8."
-    assert len(variants) == 7, f"Expected 7 variants, found {len(variants)}."
-    assert set(variants.keys()) == {"V0", "V1", "V2", "V3", "V4", "V5", "V6"}
+    assert len(variants) == 8, f"Expected 8 variants, found {len(variants)}."
+    assert set(variants.keys()) == {"V0", "V1", "V2", "V3", "V4", "V5", "V6", "V7"}

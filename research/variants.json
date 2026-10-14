@@ -87,5 +87,22 @@
     "time_exit_bars": 24,
     "symbols": ["XAUUSDm", "BTCUSDm"],
     "description": "H1 mean reversion: Buy RSI14<30, Sell RSI14>70 when H1 ADX14<20, stop 1.5xATR14, TP 1.0R, exit after 24 bars"
+  },
+  "V7": {
+    "name": "9am CR Model (M1, 08:00 NY Range, IFVG + OB Confirmation)",
+    "entry_tf": "M1",
+    "reference_tf": "H1",
+    "strategy_type": "cr_model_9am",
+    "timezone": "America/New_York",
+    "reference_hour_ny": 8,
+    "setup_window_start_ny": "09:00",
+    "setup_window_end_ny": "10:00",
+    "close_time_ny": "16:00",
+    "fvg_lookback_bars": 30,
+    "ob_lookback_bars": 10,
+    "min_stop_spread_mult": 3.0,
+    "max_trades_per_day": 1,
+    "symbols": ["XAUUSDm", "BTCUSDm"],
+    "description": "9am CR model: 08:00 NY H1 reference range, M1 setup window 09:00-10:00 NY, bias from first touch, Bullish/Bearish FVG + IFVG + OB confirmation, entry next bar open, stop at swing high/low + spread, target opposite 08:00 range, close at 16:00 NY"
   }
 }

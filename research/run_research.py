@@ -34,9 +34,21 @@ VARIANTS_FILE = os.path.join(RESEARCH_DIR, "variants.json")
 REGISTRY_FILE = os.path.join(RESEARCH_DIR, "registry.csv")
 
 TARGET_SYMBOLS = [
-    {"name": "XAUUSDm", "min_stop_dist": 1.50, "spread_est": 0.25, "contract_size": 100.0, "point": 0.01},
+    {"name": "XAUUSDm", "min_stop_dist": 1.50, "spread_est": 0.25, "contract_size": 100.0, "point": 0.001},
     {"name": "BTCUSDm", "min_stop_dist": 100.0, "spread_est": 15.0, "contract_size": 1.0, "point": 0.01}
 ]
+
+import zoneinfo
+NY_TZ = zoneinfo.ZoneInfo("America/New_York")
+UTC_TZ = zoneinfo.ZoneInfo("UTC")
+
+
+def convert_utc_to_ny(dt):
+    """Converts a UTC datetime (aware or naive UTC) to America/New_York (DST-aware)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC_TZ)
+    return dt.astimezone(NY_TZ)
+
 
 # Existing cost model (spread x 1.25 plus slippage)
 SLIPPAGE_FRACTION = 0.25
@@ -115,6 +127,7 @@ def get_registry_count():
 # ==============================================================================
 
 TF_MAP = {
+    "M1":  (mt5.TIMEFRAME_M1,  pd.Timedelta(minutes=1),  100000),
     "M5":  (mt5.TIMEFRAME_M5,  pd.Timedelta(minutes=5),  80000),
     "M15": (mt5.TIMEFRAME_M15, pd.Timedelta(minutes=15), 60000),
     "H1":  (mt5.TIMEFRAME_H1,  pd.Timedelta(hours=1),    30000),
@@ -129,6 +142,28 @@ def connect_mt5():
             print("❌ MT5 connection failed:", mt5.last_error())
             return False
     return True
+
+
+def fetch_m1_chunked(symbol, max_chunks=5, chunk_size=50000):
+    """Fetches maximum available M1 history in chunks from MT5."""
+    all_dfs = []
+    current_time = datetime.now()
+    for _ in range(max_chunks):
+        rates = mt5.copy_rates_from(symbol, mt5.TIMEFRAME_M1, current_time, chunk_size)
+        if rates is None or len(rates) == 0:
+            break
+        df = pd.DataFrame(rates)
+        all_dfs.append(df)
+        if len(df) < chunk_size:
+            break
+        oldest_epoch = int(df["time"].iloc[0])
+        current_time = datetime.fromtimestamp(oldest_epoch - 1)
+    if not all_dfs:
+        return None
+    full_df = pd.concat(all_dfs, ignore_index=True).drop_duplicates(subset=["time"]).sort_values("time").reset_index(drop=True)
+    full_df = full_df.iloc[:-1].copy()  # Drop forming candle
+    full_df["time"] = pd.to_datetime(full_df["time"], unit="s").astype("datetime64[ns]")
+    return full_df
 
 
 def setup_symbol(target_symbol):
@@ -842,6 +877,297 @@ def simulate_v6_mean_reversion(df_h1, sym_cfg):
     return trades
 
 
+def simulate_v7_cr_model(df_m1, sym_cfg):
+    """
+    V7 (9am CR model - Addendum 8):
+      - Time zone: America/New_York (DST-aware).
+      - Reference candle: H1 candle opening at 08:00 NY (closed at 09:00 NY).
+        Range [L_ref, H_ref] known strictly at 09:00 NY.
+      - Setup window: M1 bars 09:00 to 10:00 NY.
+        FIRST side touched decides direction:
+          High touched first (High >= H_ref) => Short bias (d = -1)
+          Low touched first (Low <= L_ref) => Long bias (d = 1)
+        Skip day if both sides touched in the same M1 bar.
+      - Confirmations:
+        1. Bullish FVG (shorts) / Bearish FVG (longs) in last 30 bars before entry.
+        2. IFVG confirmation: M1 candle closes below candle1.high of active bullish FVG (Shorts)
+           or closes above candle1.low of active bearish FVG (Longs).
+        3. Order block confirmation: last bullish candle (close > open) in 10 bars before confirming bar,
+           confirmed when later bearish candle closes below its low (Shorts). (Mirror for Longs).
+      - Entry: at OPEN of M1 bar after first bar where both confirmations hold, inside setup window,
+        and before opposite side of range has been touched.
+      - Stop: highest high (shorts) or lowest low (longs) from first touch to entry bar + spread.
+        Skip signal if stop_dist < 3 * spread (count as skipped).
+      - Target: other side of 08:00 range. No BE, no trailing.
+      - Time exit: close at 16:00 NY if still open (tester added).
+      - Max 1 trade per day.
+    """
+    df = df_m1.copy()
+    if "time" in df.columns:
+        times_series = pd.to_datetime(df["time"])
+    elif "utc_time" in df.columns:
+        times_series = pd.to_datetime(df["utc_time"])
+    else:
+        raise ValueError("df_m1 must contain 'time' or 'utc_time' column")
+
+    # Timezone conversion (UTC to America/New_York)
+    if times_series.dt.tz is None:
+        times_series = times_series.dt.tz_localize(UTC_TZ)
+    df["ny_time"] = times_series.dt.tz_convert(NY_TZ)
+    df["ny_date"] = df["ny_time"].dt.date
+    df.reset_index(drop=True, inplace=True)
+
+    point = sym_cfg["point"]
+    spread_est = sym_cfg["spread_est"]
+    contract_size = sym_cfg["contract_size"]
+    slippage_frac = 0.25
+
+    days = df["ny_date"].unique()
+
+    stats = {
+        "valid_range_days": 0,
+        "touch_days": 0,
+        "dual_touch_days": 0,
+        "confirmed_days": 0,
+        "skipped_signals": 0,
+        "trades": []
+    }
+
+    for cur_date in sorted(days):
+        day_df = df[df["ny_date"] == cur_date].copy().reset_index(drop=True)
+        if len(day_df) < 60:
+            continue
+
+        # 1. Reference Candle: H1 candle opening at 08:00 NY (hour == 8)
+        ref_bars = day_df[day_df["ny_time"].dt.hour == 8]
+        if len(ref_bars) < 30:
+            continue
+
+        h_ref = float(ref_bars["high"].max())
+        l_ref = float(ref_bars["low"].min())
+        stats["valid_range_days"] += 1
+
+        # 2. Setup Window: M1 bars from 09:00 to 10:00 NY (hour == 9)
+        setup_bars = day_df[day_df["ny_time"].dt.hour == 9]
+        if len(setup_bars) == 0:
+            continue
+
+        setup_indices = setup_bars.index.tolist()
+        direction = None
+        touch_idx = None
+
+        # Check first touch
+        skip_day = False
+        for idx in setup_indices:
+            bar_high = float(day_df.loc[idx, "high"])
+            bar_low = float(day_df.loc[idx, "low"])
+
+            touch_high = bar_high >= h_ref
+            touch_low = bar_low <= l_ref
+
+            if touch_high and touch_low:
+                stats["dual_touch_days"] += 1
+                skip_day = True
+                break
+            elif touch_high:
+                direction = -1
+                touch_idx = idx
+                stats["touch_days"] += 1
+                break
+            elif touch_low:
+                direction = 1
+                touch_idx = idx
+                stats["touch_days"] += 1
+                break
+
+        if skip_day or direction is None:
+            continue
+
+        target_price = l_ref if direction == -1 else h_ref
+        opp_side_price = l_ref if direction == -1 else h_ref
+
+        # Search for confirmations from touch_idx onwards within setup window
+        entry_idx = None
+        trade_signal = None
+
+        for i in range(touch_idx, setup_indices[-1] + 1):
+            # Check if opposite side touched before entry
+            if direction == -1 and float(day_df.loc[i, "low"]) <= opp_side_price:
+                break
+            if direction == 1 and float(day_df.loc[i, "high"]) >= opp_side_price:
+                break
+
+            if i < 3:
+                continue
+
+            # Confirmation 1: IFVG Confirmation
+            ifvg_confirmed = False
+            fvg_lookback_start = max(2, i - 30)
+
+            for k in range(fvg_lookback_start, i + 1):
+                if direction == -1:
+                    if float(day_df.loc[k-2, "high"]) < float(day_df.loc[k, "low"]):
+                        fvg_level = float(day_df.loc[k-2, "high"])
+                        closes_sub = day_df.loc[k:i, "close"].astype(float)
+                        if (closes_sub < fvg_level).any():
+                            ifvg_confirmed = True
+                            break
+                else:
+                    if float(day_df.loc[k-2, "low"]) > float(day_df.loc[k, "high"]):
+                        fvg_level = float(day_df.loc[k-2, "low"])
+                        closes_sub = day_df.loc[k:i, "close"].astype(float)
+                        if (closes_sub > fvg_level).any():
+                            ifvg_confirmed = True
+                            break
+
+            if not ifvg_confirmed:
+                continue
+
+            # Confirmation 2: Order Block Confirmation
+            ob_confirmed = False
+            ob_window_start = max(0, i - 10)
+            ob_window = day_df.loc[ob_window_start:i-1]
+
+            if direction == -1:
+                bullish_candles = ob_window[ob_window["close"] > ob_window["open"]]
+                if len(bullish_candles) > 0:
+                    last_ob_idx = bullish_candles.index[-1]
+                    ob_low = float(day_df.loc[last_ob_idx, "low"])
+                    later_closes = day_df.loc[last_ob_idx+1:i, "close"].astype(float)
+                    if (later_closes < ob_low).any():
+                        ob_confirmed = True
+            else:
+                bearish_candles = ob_window[ob_window["close"] < ob_window["open"]]
+                if len(bearish_candles) > 0:
+                    last_ob_idx = bearish_candles.index[-1]
+                    ob_high = float(day_df.loc[last_ob_idx, "high"])
+                    later_closes = day_df.loc[last_ob_idx+1:i, "close"].astype(float)
+                    if (later_closes > ob_high).any():
+                        ob_confirmed = True
+
+            if not ob_confirmed:
+                continue
+
+            # Both confirmations hold on closed bar i
+            if i + 1 < len(day_df):
+                entry_idx = i + 1
+                trade_signal = {
+                    "signal_bar": i,
+                    "entry_idx": entry_idx,
+                    "direction": direction,
+                    "touch_idx": touch_idx,
+                    "target_price": target_price
+                }
+                stats["confirmed_days"] += 1
+                break
+
+        if trade_signal is None:
+            continue
+
+        # Evaluate trade execution
+        e_idx = trade_signal["entry_idx"]
+        t_idx = trade_signal["touch_idx"]
+        d = trade_signal["direction"]
+        tp = trade_signal["target_price"]
+        entry_price = float(day_df.loc[e_idx, "open"])
+        entry_time = pd.Timestamp(day_df.loc[e_idx, "time"])
+
+        spread_pts = float(day_df.loc[e_idx, "spread"]) if "spread" in day_df.columns else 24.0
+        spread_price = max(spread_pts * point, spread_est)
+        cost_price = spread_price * (1.0 + slippage_frac)
+
+        # Stop loss calculation:
+        if d == -1:
+            extreme = float(day_df.loc[t_idx:e_idx, "high"].max())
+            sl = extreme + spread_price
+            stop_dist = sl - entry_price
+        else:
+            extreme = float(day_df.loc[t_idx:e_idx, "low"].min())
+            sl = extreme - spread_price
+            stop_dist = entry_price - sl
+
+        # Skip signal if stop distance is under 3 x spread
+        if stop_dist < 3.0 * spread_price or stop_dist <= 0:
+            stats["skipped_signals"] += 1
+            continue
+
+        cost_r = cost_price / stop_dist
+
+        # Simulate forward from entry bar to 16:00 NY or SL/TP
+        exit_price = None
+        exit_time = None
+        exit_reason = None
+        exit_bar = None
+
+        for j in range(e_idx, len(day_df)):
+            bar_ny_time = day_df.loc[j, "ny_time"]
+            bar_high = float(day_df.loc[j, "high"])
+            bar_low = float(day_df.loc[j, "low"])
+            bar_close = float(day_df.loc[j, "close"])
+
+            # Time exit: close at 16:00 NY if still open
+            if bar_ny_time.hour >= 16:
+                exit_price = bar_close
+                exit_time = pd.Timestamp(day_df.loc[j, "time"])
+                exit_bar = j
+                exit_reason = "TIME_EXIT_1600"
+                break
+
+            adverse = bar_low if d == 1 else bar_high
+            favour = bar_high if d == 1 else bar_low
+
+            sl_hit = (adverse - sl) * d <= 0
+            tp_hit = (favour - tp) * d >= 0
+
+            if sl_hit and tp_hit:
+                exit_price = sl
+                exit_time = pd.Timestamp(day_df.loc[j, "time"])
+                exit_bar = j
+                exit_reason = "SL_TIE"
+                break
+            elif sl_hit:
+                exit_price = sl
+                exit_time = pd.Timestamp(day_df.loc[j, "time"])
+                exit_bar = j
+                exit_reason = "SL"
+                break
+            elif tp_hit:
+                exit_price = tp
+                exit_time = pd.Timestamp(day_df.loc[j, "time"])
+                exit_bar = j
+                exit_reason = "TP"
+                break
+
+        if exit_price is None:
+            exit_price = float(day_df.iloc[-1]["close"])
+            exit_time = pd.Timestamp(day_df.iloc[-1]["time"])
+            exit_bar = len(day_df) - 1
+            exit_reason = "END_OF_DATA"
+
+        gross_r = (exit_price - entry_price) * d / stop_dist
+        net_r = gross_r - cost_r
+        pnl_usd = (exit_price - entry_price) * d * contract_size * 0.01 - cost_price * contract_size * 0.01
+
+        stats["trades"].append({
+            "entry_bar": e_idx,
+            "exit_bar": exit_bar,
+            "entry_time": entry_time,
+            "exit_time": exit_time,
+            "dir": d,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "stop_dist": stop_dist,
+            "sl": sl,
+            "tp": tp,
+            "gross_r": gross_r,
+            "net_r": net_r,
+            "pnl_usd": pnl_usd,
+            "exit_reason": exit_reason
+        })
+
+    return stats
+
+
 # ==============================================================================
 # 6. EVALUATION SUITE (DEV 5-BLOCK & LOCKBOX)
 # ==============================================================================
@@ -976,10 +1302,15 @@ def run_research():
     ensure_registry_initialized()
 
     print("=" * 70)
-    print("🔬 PHRASE 7 STRATEGY RESEARCH HARNESS (ADDENDUM 5 REVISED)")
+    print("🔬 PHRASE 7 & 9 STRATEGY RESEARCH HARNESS (ADDENDA 5 & 8)")
     print("=" * 70)
     print("🔒 Ground Rules Active: Zero orders, no model overwrites, fixed parameters.")
     print("🌍 Broker Timezone Verified: Exness MT5 server is UTC+0 (GMT+0).")
+
+    # Timezone conversion example (Addendum 8 requirement)
+    ex_summer_utc = datetime(2026, 7, 15, 12, 0)
+    ex_summer_ny = convert_utc_to_ny(ex_summer_utc)
+    print(f"🌍 Broker Timezone Conversion Example: {ex_summer_utc} UTC -> {ex_summer_ny} America/New_York (DST-aware)")
 
     if not connect_mt5():
         print("❌ Could not connect to MetaTrader 5.")
@@ -1002,13 +1333,18 @@ def run_research():
             if df is not None:
                 data_cache[sym][tf] = df
                 print(f"📥 {sym} {tf}: {len(df)} candles ({df['time'].iloc[0].strftime('%Y-%m-%d')} to {df['time'].iloc[-1].strftime('%Y-%m-%d')})")
+        # Chunked fetch for M1 (Addendum 8)
+        df_m1 = fetch_m1_chunked(resolved)
+        if df_m1 is not None:
+            data_cache[sym]["M1"] = df_m1
+            print(f"📥 {sym} M1 (Chunked): {len(df_m1)} candles ({df_m1['time'].iloc[0].strftime('%Y-%m-%d')} to {df_m1['time'].iloc[-1].strftime('%Y-%m-%d')})")
 
     dev_results = []
     trade_collections = {}
 
     for var_id, var_cfg in variants.items():
-        if var_id not in ["V0", "V1", "V2", "V3", "V4", "V5", "V6"]:
-            continue  # Max 7 variants
+        if var_id not in ["V0", "V1", "V2", "V3", "V4", "V5", "V6", "V7"]:
+            continue  # Max 8 variants
 
         for sym_cfg in TARGET_SYMBOLS:
             sym = sym_cfg["name"]
@@ -1020,13 +1356,15 @@ def run_research():
             trend_tf = var_cfg.get("trend_tf")
 
             df_entry = cache.get(entry_tf)
-            if df_entry is None or len(df_entry) < 500:
+            if df_entry is None or len(df_entry) < 60:
                 print(f"⚠️ Skipping {var_id} on {sym}: Insufficient {entry_tf} data.")
                 continue
 
             # Run specific simulator
             stype = var_cfg.get("strategy_type")
             trades = []
+            v7_stats = None
+
             if stype == "ema_pullback":
                 df_trend = cache.get(trend_tf)
                 if df_trend is not None:
@@ -1039,6 +1377,9 @@ def run_research():
                 trades = simulate_v5_session_breakout(df_entry, sym_cfg)
             elif stype == "mean_reversion":
                 trades = simulate_v6_mean_reversion(df_entry, sym_cfg)
+            elif stype == "cr_model_9am":
+                v7_stats = simulate_v7_cr_model(df_entry, sym_cfg)
+                trades = v7_stats["trades"]
 
             key = (var_id, sym)
             trade_collections[key] = trades
@@ -1057,10 +1398,12 @@ def run_research():
             dev_metrics["trend_tf"] = trend_tf or "None"
             dev_metrics["date_span"] = f"{t_min.strftime('%Y-%m-%d')} to {t_split.strftime('%Y-%m-%d')}"
             dev_metrics["lockbox_trades"] = lock_trades
+            if v7_stats is not None:
+                dev_metrics["v7_stats"] = v7_stats
             dev_results.append(dev_metrics)
 
             # Log to registry.csv
-            params_str = f"{entry_tf}/{trend_tf or 'None'}_TP={var_cfg.get('tp_r')}R"
+            params_str = f"{entry_tf}/{trend_tf or 'None'}_TP={var_cfg.get('tp_r')}R" if var_cfg.get('tp_r') else f"{entry_tf}_9amCR"
             res_str = f"Net={dev_metrics['net_exp']:+.3f}R,th_t={dev_metrics['thinned_t']:+.2f},folds={dev_metrics['positive_blocks']}/5,trades={dev_metrics['n_trades']},status={dev_metrics['status']}"
             log_to_registry(var_id, sym, params_str, res_str)
 
@@ -1119,7 +1462,7 @@ def generate_markdown_report(dev_results, finalist, lockbox_result):
     reg_count = get_registry_count()
 
     lines = [
-        f"# Phase 7 Strategy Research Report (Addendum 5 Revised)",
+        f"# Phase 7 & 9 Strategy Research Report (Addenda 5 & 8)",
         f"",
         f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ",
         f"**Total Registry Counter:** {reg_count} honest attempts recorded  ",
@@ -1145,11 +1488,37 @@ def generate_markdown_report(dev_results, finalist, lockbox_result):
             f"{r['max_drawdown']:.2f}R | ${r['pnl_usd']:+.2f} | **`{r['status']}`** |"
         )
 
+    # Detailed Variant V7 table (Addendum 8 requirement)
+    v7_metrics = [r for r in dev_results if r["variant"] == "V7"]
+    if v7_metrics:
+        lines.extend([
+            f"",
+            f"---",
+            f"",
+            f"## 2. Variant V7 (9am CR Model) Pattern Formation Telemetry",
+            f"",
+            f"| Symbol | M1 Date Span | Valid 08:00 Range Days | Touch Days | Confirmed Days | Skipped Signals | Executed Trades | Win % | Gross Exp | Net Exp | Dev Status |",
+            f"| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |"
+        ])
+        for r in v7_metrics:
+            st = r.get("v7_stats", {})
+            lines.append(
+                f"| `{r['symbol']}` | {r['date_span']} | {st.get('valid_range_days', '—')} | "
+                f"{st.get('touch_days', '—')} | {st.get('confirmed_days', '—')} | "
+                f"{st.get('skipped_signals', '—')} | {r['n_trades']} | {r['win_rate']:.1f}% | "
+                f"{r['gross_exp']:+.3f}R | **{r['net_exp']:+.3f}R** | **`{r['status']}`** |"
+            )
+        lines.extend([
+            f"",
+            f"> [!NOTE]",
+            f"> Time exit at 16:00 NY was added by the tester (not part of the original CR model video) to prevent indefinite overnight carry."
+        ])
+
     lines.extend([
         f"",
         f"---",
         f"",
-        f"## 2. Lockbox Evaluation Protocol (Single Use)",
+        f"## 3. Lockbox Evaluation Protocol (Single Use)",
         f""
     ])
 
@@ -1182,7 +1551,7 @@ def generate_markdown_report(dev_results, finalist, lockbox_result):
         "",
         "---",
         "",
-        "## 3. Pre-Registered Variants Reference",
+        "## 4. Pre-Registered Variants Reference (8/8 Cap Full)",
         "",
         "1. **V0 (Control):** M5 EMA9/21 cross/pullback, H1 trend, current filters, BE 0.9R, TP 1.8R (`XAUUSDm`, `BTCUSDm`).",
         "2. **V1:** M15 entry, H1 trend, no breakeven, stop 1.5 x ATR14, TP 1.8R (`XAUUSDm`, `BTCUSDm`).",
@@ -1191,7 +1560,7 @@ def generate_markdown_report(dev_results, finalist, lockbox_result):
         "5. **V4:** H4 20-bar Donchian breakout in direction of D1 close vs EMA50, stop 2.0 x ATR14, TP 3.0R, no BE (`XAUUSDm`, `BTCUSDm`).",
         "6. **V5:** Session-open breakout (00-07 UTC range, 07-11 UTC entry on M15 close beyond range, stop opposite boundary [1,3] x ATR14, TP 1.5R, time exit 16:00 UTC, max 1 trade/day) (`XAUUSDm` ONLY).",
         "7. **V6:** H1 mean reversion (RSI14 < 30 / > 70 when H1 ADX14 < 20, stop 1.5 x ATR14, TP 1.0R, exit after 24 bars) (`XAUUSDm`, `BTCUSDm`).",
-        "8. **Slot 7:** Empty.",
+        "8. **V7:** 9am CR model (08:00 NY range, M1 09:00-10:00 NY setup window, first touch bias, Bullish/Bearish FVG + IFVG + OB confirmation, entry next bar open, stop at swing extreme + spread, target opposite 08:00 range, time exit 16:00 NY, max 1 trade/day) (`XAUUSDm`, `BTCUSDm`).",
         ""
     ])
 
