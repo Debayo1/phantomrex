@@ -1000,7 +1000,7 @@ def simulate_v7_cr_model(df_m1, sym_cfg):
             if i < 3:
                 continue
 
-            # Confirmation 1: IFVG Confirmation
+            # Confirmation 1: IFVG Confirmation (confirming close must be at or after touch_idx)
             ifvg_confirmed = False
             fvg_lookback_start = max(2, i - 30)
 
@@ -1009,21 +1009,23 @@ def simulate_v7_cr_model(df_m1, sym_cfg):
                     if float(day_df.loc[k-2, "high"]) < float(day_df.loc[k, "low"]):
                         fvg_level = float(day_df.loc[k-2, "high"])
                         closes_sub = day_df.loc[k+1:i, "close"].astype(float)
-                        if (closes_sub < fvg_level).any():
+                        hits = closes_sub[closes_sub < fvg_level]
+                        if len(hits) > 0 and hits.index[0] >= touch_idx:
                             ifvg_confirmed = True
                             break
                 else:
                     if float(day_df.loc[k-2, "low"]) > float(day_df.loc[k, "high"]):
                         fvg_level = float(day_df.loc[k-2, "low"])
                         closes_sub = day_df.loc[k+1:i, "close"].astype(float)
-                        if (closes_sub > fvg_level).any():
+                        hits = closes_sub[closes_sub > fvg_level]
+                        if len(hits) > 0 and hits.index[0] >= touch_idx:
                             ifvg_confirmed = True
                             break
 
             if not ifvg_confirmed:
                 continue
 
-            # Confirmation 2: Order Block Confirmation
+            # Confirmation 2: Order Block Confirmation (confirming close must be at or after touch_idx)
             ob_confirmed = False
             ob_window_start = max(0, i - 10)
             ob_window = day_df.loc[ob_window_start:i-1]
@@ -1034,7 +1036,8 @@ def simulate_v7_cr_model(df_m1, sym_cfg):
                     last_ob_idx = bullish_candles.index[-1]
                     ob_low = float(day_df.loc[last_ob_idx, "low"])
                     later_closes = day_df.loc[last_ob_idx+1:i, "close"].astype(float)
-                    if (later_closes < ob_low).any():
+                    hits = later_closes[later_closes < ob_low]
+                    if len(hits) > 0 and hits.index[0] >= touch_idx:
                         ob_confirmed = True
             else:
                 bearish_candles = ob_window[ob_window["close"] < ob_window["open"]]
@@ -1042,7 +1045,8 @@ def simulate_v7_cr_model(df_m1, sym_cfg):
                     last_ob_idx = bearish_candles.index[-1]
                     ob_high = float(day_df.loc[last_ob_idx, "high"])
                     later_closes = day_df.loc[last_ob_idx+1:i, "close"].astype(float)
-                    if (later_closes > ob_high).any():
+                    hits = later_closes[later_closes > ob_high]
+                    if len(hits) > 0 and hits.index[0] >= touch_idx:
                         ob_confirmed = True
 
             if not ob_confirmed:
