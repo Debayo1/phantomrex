@@ -62,3 +62,5 @@ date,batch,variant,symbol,params,result,note
 2026-10-14 04:00:04,v7_fix,V7,BTCUSDm,M1_9amCR,"Net=+0.361R,th_t=+0.61,folds=3/5,trades=46,status=INSUFFICIENT_DATA",V7 rerun after implementation fix (not a new variant)
 2026-10-14 04:18:03,v7_fix_ordering,V7,XAUUSDm,M1_9amCR,"Net=-0.054R,th_t=-0.24,folds=3/5,trades=46,status=INSUFFICIENT_DATA",V7 rerun 2 after ordering fix (not a new variant)
 2026-10-14 04:18:12,v7_fix_ordering,V7,BTCUSDm,M1_9amCR,"Net=+0.049R,th_t=+2.54,folds=2/5,trades=46,status=INSUFFICIENT_DATA",V7 rerun 2 after ordering fix (not a new variant)
+2026-10-14 10:39:44,v7_fix_thinning,V7,BTCUSDm,M1_9amCR,"Net=+0.049R,th_t=+0.22,folds=2/5,trades=46,status=INSUFFICIENT_DATA",V7 BTC rerun after global thinning bar index fix (not a new variant)
+2026-10-14 11:05:06,v7_recompute,V7,XAUUSDm,M1_9amCR,"Net=-0.054R,th_t=-0.24,folds=3/5,trades=46,status=INSUFFICIENT_DATA",V7 Gold thinned t recompute with global bar fix (not a new variant)

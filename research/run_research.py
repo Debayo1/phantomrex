@@ -916,6 +916,7 @@ def simulate_v7_cr_model(df_m1, sym_cfg):
     df["ny_time"] = times_series.dt.tz_convert(NY_TZ)
     df["ny_date"] = df["ny_time"].dt.date
     df.reset_index(drop=True, inplace=True)
+    df["global_bar"] = np.arange(len(df))
 
     point = sym_cfg["point"]
     spread_est = sym_cfg["spread_est"]
@@ -1155,12 +1156,12 @@ def simulate_v7_cr_model(df_m1, sym_cfg):
         pnl_usd = (exit_price - entry_price) * d * contract_size * 0.01 - cost_price * contract_size * 0.01
 
         stats["trades"].append({
-            "entry_bar": e_idx,
-            "exit_bar": exit_bar,
+            "entry_bar": int(day_df.loc[e_idx, "global_bar"]),
+            "exit_bar": int(day_df.loc[exit_bar, "global_bar"]),
             "entry_time": entry_time,
             "exit_time": exit_time,
             "touch_time": pd.Timestamp(day_df.loc[t_idx, "time"]),
-            "touch_bar": t_idx,
+            "touch_bar": int(day_df.loc[t_idx, "global_bar"]),
             "touch_side": "HIGH" if d == -1 else "LOW",
             "h_ref": h_ref,
             "l_ref": l_ref,

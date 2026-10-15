@@ -1518,6 +1518,8 @@ class TelegramBotManager:
 
             bot.reply_to(message, "📥 <b>Checking for updates from GitHub...</b>")
             try:
+                # Automatically stash local runtime changes (e.g. registry.csv or logs) so pull is never blocked
+                subprocess.run([git_bin, "stash"], cwd=project_dir, capture_output=True, text=True, timeout=15)
                 res = subprocess.run([git_bin, "pull"], cwd=project_dir, capture_output=True, text=True, timeout=30)
                 out = (res.stdout + res.stderr).strip()
                 if "Already up to date" in out:
