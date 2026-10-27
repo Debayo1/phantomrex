@@ -84,6 +84,13 @@ def record_paper_trade(entry_record):
         ])
 
 
+def _filter_recent_trades(trades, days_back, now=None):
+    """Keep trades within the rolling window, using the strategy's New York calendar."""
+    reference_time = now or datetime.now(NY_TZ)
+    cutoff_date = reference_time.astimezone(NY_TZ).date() - timedelta(days=days_back)
+    return [trade for trade in trades if trade["entry_time"].date() >= cutoff_date]
+
+
 def run_paper_logger(days_back=10):
     """
     Scans the past `days_back` days from MT5 and logs all V7 setups to paper log.
@@ -122,8 +129,7 @@ def run_paper_logger(days_back=10):
         trades = stats.get("trades", [])
 
         # Filter trades to recent days
-        cutoff_date = (datetime.now() - timedelta(days=days_back)).date()
-        recent_trades = [t for t in trades if t["entry_time"].date() >= cutoff_date]
+        recent_trades = _filter_recent_trades(trades, days_back)
 
         for t in recent_trades:
             record_paper_trade({

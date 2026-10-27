@@ -5,7 +5,8 @@ import time
 import os
 import joblib
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import socket
 
 import threading
@@ -62,6 +63,11 @@ ASSET_CONFIGS = {
 
 TIMEFRAME_LOW = mt5.TIMEFRAME_M5    # Trigger & execution timeframe (5-min candles)
 TIMEFRAME_HIGH = mt5.TIMEFRAME_H1   # Macro trend timeframe (1-hour candles)
+V7_TIMEFRAME = mt5.TIMEFRAME_M1
+V7_M1_LOOKBACK = 1500
+V7_MAGIC_OFFSET = 10
+NY_TZ = ZoneInfo("America/New_York")
+UTC_TZ = ZoneInfo("UTC")
 
 # ONLY OWNER MAY CHANGE THIS CONSTANT
 MAX_LOT_CAP = 0.01
@@ -175,6 +181,217 @@ def fetch_data(symbol, count_m5=300, count_h1=400, trend_mode=DEFAULT_TREND_MODE
 
     df = prepare_indicators(df_low, df_high, trend_mode=trend_mode)
     return df
+
+
+def _is_demo_account(account_info=None):
+    """V7 is restricted to MT5 demo accounts; unknown account state fails closed."""
+    account_info = account_info or mt5.account_info()
+    return bool(account_info and getattr(account_info, "trade_mode", None) == 0)
+
+
+def _fetch_v7_live_signal(symbol, sym_cfg, last_processed_bar=None):
+    """Return a V7 signal only when its next M1 entry bar is the current bar."""
+    from research.run_research import simulate_v7_cr_model
+
+    current_rates = mt5.copy_rates_from_pos(symbol, V7_TIMEFRAME, 0, 1)
+    if current_rates is None or len(current_rates) == 0:
+        return None, None
+    latest_time = pd.Timestamp(pd.to_datetime(current_rates[0]["time"], unit="s"))
+    if latest_time == last_processed_bar:
+        return latest_time, None
+
+    rates = mt5.copy_rates_from_pos(symbol, V7_TIMEFRAME, 0, V7_M1_LOOKBACK)
+    if rates is None or len(rates) < 60:
+        return None, None
+
+    df_m1 = pd.DataFrame(rates).sort_values("time").drop_duplicates("time").reset_index(drop=True)
+    df_m1["time"] = pd.to_datetime(df_m1["time"], unit="s")
+    current_bar_time = pd.Timestamp(df_m1.iloc[-1]["time"])
+
+    stats = simulate_v7_cr_model(df_m1, sym_cfg)
+    for trade in stats["trades"]:
+        if pd.Timestamp(trade["entry_time"]) == current_bar_time:
+            return current_bar_time, trade
+    return current_bar_time, None
+
+
+def _v7_traded_on_ny_date(symbol, magic, ny_date):
+    """Check broker history so a restart cannot create a second V7 entry that day."""
+    start_ny = datetime.combine(ny_date, datetime.min.time(), tzinfo=NY_TZ)
+    end_ny = start_ny + timedelta(days=1)
+    deals = mt5.history_deals_get(
+        start_ny.astimezone(UTC_TZ),
+        end_ny.astimezone(UTC_TZ),
+    )
+    if deals is None:
+        raise RuntimeError(f"Could not check V7 trade history for {symbol}: {mt5.last_error()}")
+    return any(
+        getattr(deal, "symbol", None) == symbol
+        and getattr(deal, "magic", None) == magic
+        and getattr(deal, "entry", None) == mt5.DEAL_ENTRY_IN
+        for deal in deals
+    )
+
+
+def _close_v7_positions_at_session_end(symbol, cfg, now_ny=None):
+    """Close V7 demo positions at 16:00 New York without applying legacy trailing."""
+    if not _is_demo_account():
+        return
+    now_ny = now_ny or datetime.now(NY_TZ)
+    if (now_ny.hour, now_ny.minute) < (16, 0):
+        return
+
+    for position in mt5.positions_get(symbol=symbol) or []:
+        if position.magic != cfg["magic_base"] + V7_MAGIC_OFFSET:
+            continue
+        tick = mt5.symbol_info_tick(symbol)
+        if not tick:
+            print(f"⚠️ V7 time exit deferred for {symbol} #{position.ticket}: no current tick")
+            continue
+
+        order_type = mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+        price = tick.bid if order_type == mt5.ORDER_TYPE_SELL else tick.ask
+        result = mt5.order_send({
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": position.volume,
+            "type": order_type,
+            "position": position.ticket,
+            "price": price,
+            "deviation": 30,
+            "magic": position.magic,
+            "comment": "V7_1600_NY_Exit",
+        })
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            detail = result.comment if result else mt5.last_error()
+            print(f"❌ V7 time exit failed for {symbol} #{position.ticket}: {detail}")
+        else:
+            print(f"⏰ V7 closed {symbol} position #{position.ticket} at 16:00 New York")
+
+
+def _try_v7_demo_entry(symbol, asset_data, candle_time):
+    """Evaluate one new M1 bar and place at most one risk-checked V7 demo entry."""
+    account = mt5.account_info()
+    if not _is_demo_account(account):
+        _record_entry_diagnostic(asset_data, "v7_demo_only", candle_time, "V7 requires an MT5 demo account")
+        return
+
+    cfg = asset_data["config"]
+    symbol_info = mt5.symbol_info(symbol)
+    if not symbol_info:
+        _record_entry_diagnostic(asset_data, "v7_market_data_unavailable", candle_time, "Missing symbol metadata")
+        return
+    sym_cfg = {
+        "name": symbol,
+        "point": symbol_info.point,
+        "spread_est": cfg["spread_est"],
+        "contract_size": symbol_info.trade_contract_size,
+    }
+    current_bar_time, trade = _fetch_v7_live_signal(
+        symbol, sym_cfg, asset_data.get("last_v7_bar")
+    )
+    if current_bar_time is None or current_bar_time == asset_data.get("last_v7_bar"):
+        return
+    asset_data["last_v7_bar"] = current_bar_time
+
+    if trade is None:
+        _record_entry_diagnostic(asset_data, "v7_no_setup", current_bar_time, "No V7 entry confirmed for the current M1 bar")
+        return
+
+    direction = int(trade["dir"])
+    ny_entry_time = pd.Timestamp(trade["entry_time"]).tz_localize(UTC_TZ).tz_convert(NY_TZ)
+    ny_date = ny_entry_time.date()
+    magic = cfg["magic_base"] + V7_MAGIC_OFFSET
+    try:
+        if _v7_traded_on_ny_date(symbol, magic, ny_date):
+            _record_entry_diagnostic(asset_data, "v7_daily_limit", current_bar_time, f"V7 already traded {ny_date} New York")
+            return
+    except RuntimeError as exc:
+        _record_entry_diagnostic(asset_data, "v7_history_unavailable", current_bar_time, str(exc))
+        return
+
+    blocked, reason = check_daily_loss_guard()
+    if blocked:
+        _record_entry_diagnostic(asset_data, "daily_loss_guard", current_bar_time, reason)
+        return
+
+    if tg_manager.settings.get("news_filter_enabled", True):
+        is_news_blocked, news_summary, _ = news_filter.check_news_block()
+        if is_news_blocked:
+            _record_entry_diagnostic(asset_data, "news_filter", current_bar_time, news_summary)
+            return
+
+    positions = mt5.positions_get(symbol=symbol) or []
+    max_open = min(int(tg_manager.settings.get("max_positions", MAX_OPEN_POSITIONS_PER_SYMBOL)), 3)
+    if len(positions) >= max_open:
+        _record_entry_diagnostic(asset_data, "position_limit", current_bar_time, f"{len(positions)} positions open; limit {max_open}")
+        return
+
+    tick = mt5.symbol_info_tick(symbol)
+    symbol_info = mt5.symbol_info(symbol)
+    if not tick or not symbol_info:
+        _record_entry_diagnostic(asset_data, "v7_market_data_unavailable", current_bar_time, "Missing current tick or symbol metadata")
+        return
+
+    order_type = mt5.ORDER_TYPE_BUY if direction == 1 else mt5.ORDER_TYPE_SELL
+    entry_price = tick.ask if direction == 1 else tick.bid
+    stop_dist = float(trade["stop_dist"])
+    sl = entry_price - stop_dist if direction == 1 else entry_price + stop_dist
+    tp = float(trade["tp"])
+    if (direction == 1 and not (sl < entry_price < tp)) or (direction == -1 and not (tp < entry_price < sl)):
+        _record_entry_diagnostic(asset_data, "v7_price_moved_past_target", current_bar_time, "Current price is no longer between the strategy stop and target")
+        return
+
+    digits = int(symbol_info.digits)
+    sl = round(sl, digits)
+    tp = round(tp, digits)
+    balance, currency = get_account_balance_native()
+    risk_pct = float(tg_manager.settings.get("risk_percent", 1.5)) / 100.0
+    risk_amount = balance * risk_pct
+    lot = calculate_lot_size(symbol, order_type, risk_amount, entry_price, sl)
+    real_risk = calc_risk_for_lot(symbol, order_type, lot, entry_price, sl)
+    max_overshoot = float(tg_manager.settings.get("max_risk_overshoot", DEFAULT_MAX_RISK_OVERSHOOT))
+    if real_risk is None or real_risk > risk_amount * max_overshoot:
+        detail = f"Risk {real_risk if real_risk is not None else 'unknown'} {currency}; budget {risk_amount:.2f} {currency} (max {max_overshoot:.1f}x)"
+        _record_entry_diagnostic(asset_data, "real_risk_guard", current_bar_time, detail)
+        return
+
+    if not _is_demo_account(mt5.account_info()):
+        _record_entry_diagnostic(asset_data, "v7_demo_only", current_bar_time, "Account mode changed; V7 order blocked")
+        return
+
+    result = send_market_order(
+        symbol, order_type, entry_price, sl, tp, lot, magic, f"V7_CR_{ny_date:%Y%m%d}"
+    )
+    if not result:
+        _record_entry_diagnostic(asset_data, "v7_order_failed", current_bar_time, "MT5 rejected V7 demo order")
+        return
+
+    asset_data["last_v7_ny_date"] = ny_date
+    _record_entry_diagnostic(asset_data, "v7_demo_order_opened", current_bar_time, f"{'BUY' if direction == 1 else 'SELL'} {ny_date} NY")
+    try:
+        db_ledger.log_signal(
+            symbol=symbol,
+            direction=direction,
+            status="EXECUTED",
+            position_ticket=result[1] if isinstance(result, tuple) else result,
+            entry_price=entry_price,
+            initial_sl=sl,
+            initial_risk_price=abs(entry_price - sl),
+            initial_risk_currency=real_risk,
+            confidence=None,
+            spread=tick.ask - tick.bid,
+            trend_mode="V7_9AM_CR",
+        )
+    except Exception as exc:
+        print(f"⚠️ Error logging V7 demo trade to db_ledger: {exc}")
+    tg_manager.send_broadcast_alert(
+        f"🧪 <b>V7 DEMO trade opened: {symbol}</b>\n"
+        f"• Direction: {'BUY' if direction == 1 else 'SELL'}\n"
+        f"• Entry: {entry_price:.{digits}f} | SL: {sl:.{digits}f} | TP: {tp:.{digits}f}\n"
+        f"• Risk budget: {risk_amount:.2f} {currency} | Actual estimated risk: {real_risk:.2f} {currency}\n"
+        f"• Session: {ny_date} New York"
+    )
 
 
 # ==============================================================================
@@ -478,6 +695,8 @@ def manage_active_trades(symbol, cfg, current_candle, closed_candle=None):
     for pos in positions:
         # Hands-off manual trades: Only manage bot trades within magic range (magic_base < magic <= magic_base + 10)
         if not (cfg["magic_base"] < pos.magic <= cfg["magic_base"] + 10):
+            continue
+        if pos.magic == cfg["magic_base"] + V7_MAGIC_OFFSET:
             continue
 
         ticket = pos.ticket
@@ -807,6 +1026,8 @@ def run_live():
             "edge_ok": False,
             "no_edge_warned": False,
             "last_traded_bar": None,
+            "last_v7_bar": None,
+            "last_v7_ny_date": None,
             "entry_diagnostics": {
                 "counts": {},
                 "bar": None,
@@ -835,7 +1056,7 @@ def run_live():
         print("❌ No active assets available. Check MT5 connection.")
         return
 
-    print("\n🟢 Dual-Asset Trading Loop Active. Press Ctrl+C in terminal to stop.\n")
+    print("\n🟢 Trading loop active. V7 is restricted to demo accounts; real accounts retain the existing strategy. Press Ctrl+C to stop.\n")
 
     last_heartbeat = 0
 
@@ -846,6 +1067,8 @@ def run_live():
 
             # Check if user paused bot via Telegram
             if tg_manager.is_paused:
+                for symbol, asset_data in LOADED_ASSETS.items():
+                    _close_v7_positions_at_session_end(symbol, asset_data["config"])
                 if print_heartbeat:
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏸️ BOT PAUSED VIA TELEGRAM. Scanning paused.")
                     last_heartbeat = current_time
@@ -856,6 +1079,10 @@ def run_live():
                 cfg = asset_data["config"]
                 ai_model = asset_data["model"]
                 threshold = asset_data["threshold"]
+                _close_v7_positions_at_session_end(symbol, cfg)
+
+                if _is_demo_account():
+                    _try_v7_demo_entry(symbol, asset_data, None)
 
                 df = fetch_data(symbol, count_m5=300, count_h1=400, trend_mode=asset_data.get("trend_mode", DEFAULT_TREND_MODE))
                 if df is None or len(df) < 5:
@@ -918,6 +1145,9 @@ def run_live():
                     rsi_val = last_candle["m5_rsi"]
                     adx_val = last_candle["h1_adx"]
                     print(f"[{now_str}] {symbol:<8} @ ${live_candle['close']:8.2f} | H1: {h1_trend_str} (ADX: {adx_val:4.1f}) | M5 RSI: {rsi_val:4.1f} | Open: {pos_count}")
+
+                if _is_demo_account():
+                    continue
 
                 # Machine Learning Model Filter:
                 # Runs identically on both Live and Demo using the configured threshold.

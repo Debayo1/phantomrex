@@ -7,7 +7,7 @@ Tests:
   3. Simulator test: Stop is counted first when both stop and TP are hit in the same bar.
   4. Lockbox test: Zero index overlap between Dev and Lockbox (with boundary purge).
   5. Registry test: Every run adds rows, including failed variants.
-  6. Variants test: variants.json contains at most 8 pre-registered variants (V0-V6).
+  6. Variants test: variants.json contains at most 9 pre-registered variants (V0-V8).
 """
 
 import os
@@ -24,6 +24,9 @@ from research.run_research import (
     get_registry_count,
     simulate_v0_v1_v2,
     simulate_v3_v4_breakout,
+    simulate_smc_structure_ob_fvg,
+    _confirmed_smc_structure,
+    TF_MAP,
     REGISTRY_FILE,
     VARIANTS_FILE
 )
@@ -237,14 +240,57 @@ def test_runtime_registry_is_outside_tracked_research_directory():
     assert os.path.basename(REGISTRY_FILE) == "strategy_registry.csv"
 
 
-def test_variants_json_max_eight_pre_registered():
-    """H7.6: Verify variants.json exists, defines the 8 variants V0-V7 (cap full)."""
+def test_variants_json_max_nine_pre_registered():
+    """Verify variants.json contains original variants and one research-only SMC proxy."""
     assert os.path.exists(VARIANTS_FILE)
     import json
     with open(VARIANTS_FILE, "r", encoding="utf-8") as f:
         variants = json.load(f)
 
-    # Maximum 8 variants total, exactly 8 registered (V0 through V7, cap is full)
-    assert len(variants) <= 8, f"Too many variants! Found {len(variants)}, max allowed is 8."
-    assert len(variants) == 8, f"Expected 8 variants, found {len(variants)}."
-    assert set(variants.keys()) == {"V0", "V1", "V2", "V3", "V4", "V5", "V6", "V7"}
+    assert len(variants) <= 9, f"Too many variants! Found {len(variants)}, max allowed is 9."
+    assert len(variants) == 9, f"Expected 9 variants, found {len(variants)}."
+    assert set(variants.keys()) == {"V0", "V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8"}
+    assert variants["V8"]["strategy_type"] == "smc_structure_ob_fvg"
+    assert variants["V8"]["entry_tf"] == "M15"
+    assert variants["V8"]["trend_tfs"] == ["D1", "H4", "H2"]
+
+
+def test_smc_confirmed_swings_do_not_use_unconfirmed_bars():
+    df = pd.DataFrame({
+        "time": pd.date_range("2026-01-01", periods=9, freq="2h"),
+        "high": [10, 12, 14, 12, 11, 13, 15, 13, 12],
+        "low": [5, 7, 9, 7, 6, 8, 10, 8, 7],
+        "open": [8] * 9,
+        "close": [9] * 9,
+    })
+
+    structure = _confirmed_smc_structure(df, "H2", swing_bars=2)
+
+    assert TF_MAP["H2"][1] == pd.Timedelta(hours=2)
+    assert structure.loc[4, "swing_high"] == 14
+    assert structure.loc[4, "swing_high_index"] == 2
+    assert structure.loc[2, "swing_high_index"] == -1
+
+
+def test_smc_simulator_requires_all_timeframes_and_returns_no_trade_for_flat_data():
+    times_m15 = pd.date_range("2026-01-01", periods=200, freq="15min")
+    times_h2 = pd.date_range("2025-12-01", periods=120, freq="2h")
+    times_h4 = pd.date_range("2025-11-01", periods=100, freq="4h")
+    times_d1 = pd.date_range("2025-01-01", periods=100, freq="1D")
+
+    def flat_frame(times):
+        return pd.DataFrame({
+            "time": times,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "spread": 10,
+        })
+
+    sym_cfg = {"point": 0.01, "spread_est": 0.1, "contract_size": 1.0}
+    flat = flat_frame(times_m15)
+    assert simulate_smc_structure_ob_fvg(flat, None, flat_frame(times_h4), flat_frame(times_h2), sym_cfg) == []
+    assert simulate_smc_structure_ob_fvg(
+        flat, flat_frame(times_d1), flat_frame(times_h4), flat_frame(times_h2), sym_cfg
+    ) == []

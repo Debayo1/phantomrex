@@ -132,6 +132,7 @@ TF_MAP = {
     "M5":  (mt5.TIMEFRAME_M5,  pd.Timedelta(minutes=5),  80000),
     "M15": (mt5.TIMEFRAME_M15, pd.Timedelta(minutes=15), 60000),
     "H1":  (mt5.TIMEFRAME_H1,  pd.Timedelta(hours=1),    30000),
+    "H2":  (mt5.TIMEFRAME_H2,  pd.Timedelta(hours=2),    20000),
     "H4":  (mt5.TIMEFRAME_H4,  pd.Timedelta(hours=4),    15000),
     "D1":  (mt5.TIMEFRAME_D1,  pd.Timedelta(days=1),     5000)
 }
@@ -148,7 +149,7 @@ def connect_mt5():
 def fetch_m1_chunked(symbol, max_chunks=5, chunk_size=50000):
     """Fetches maximum available M1 history in chunks from MT5."""
     all_dfs = []
-    current_time = datetime.now()
+    current_time = datetime.now(UTC_TZ)
     for _ in range(max_chunks):
         rates = mt5.copy_rates_from(symbol, mt5.TIMEFRAME_M1, current_time, chunk_size)
         if rates is None or len(rates) == 0:
@@ -158,7 +159,7 @@ def fetch_m1_chunked(symbol, max_chunks=5, chunk_size=50000):
         if len(df) < chunk_size:
             break
         oldest_epoch = int(df["time"].iloc[0])
-        current_time = datetime.fromtimestamp(oldest_epoch - 1)
+        current_time = datetime.fromtimestamp(oldest_epoch - 1, UTC_TZ)
     if not all_dfs:
         return None
     full_df = pd.concat(all_dfs, ignore_index=True).drop_duplicates(subset=["time"]).sort_values("time").reset_index(drop=True)
@@ -1181,6 +1182,257 @@ def simulate_v7_cr_model(df_m1, sym_cfg):
     return stats
 
 
+def _confirmed_smc_structure(df, timeframe, swing_bars=2):
+    """Return swing levels and HH/HL or LH/LL bias known at each completed bar."""
+    _, duration, _ = TF_MAP[timeframe]
+    highs = pd.to_numeric(df["high"]).to_numpy(dtype=float)
+    lows = pd.to_numeric(df["low"]).to_numpy(dtype=float)
+    n = len(df)
+
+    swing_high = np.full(n, np.nan)
+    swing_high_index = np.full(n, -1, dtype=int)
+    swing_low = np.full(n, np.nan)
+    swing_low_index = np.full(n, -1, dtype=int)
+    structure_dir = np.zeros(n, dtype=int)
+    confirmed_highs = []
+    confirmed_lows = []
+
+    for i in range(n):
+        pivot = i - swing_bars
+        if pivot >= swing_bars:
+            left = slice(pivot - swing_bars, pivot)
+            right = slice(pivot + 1, i + 1)
+            if highs[pivot] > np.max(highs[left]) and highs[pivot] > np.max(highs[right]):
+                confirmed_highs.append((pivot, highs[pivot]))
+            if lows[pivot] < np.min(lows[left]) and lows[pivot] < np.min(lows[right]):
+                confirmed_lows.append((pivot, lows[pivot]))
+
+        if confirmed_highs:
+            swing_high_index[i], swing_high[i] = confirmed_highs[-1]
+        if confirmed_lows:
+            swing_low_index[i], swing_low[i] = confirmed_lows[-1]
+
+        if len(confirmed_highs) >= 2 and len(confirmed_lows) >= 2:
+            higher_highs = confirmed_highs[-1][1] > confirmed_highs[-2][1]
+            higher_lows = confirmed_lows[-1][1] > confirmed_lows[-2][1]
+            lower_highs = confirmed_highs[-1][1] < confirmed_highs[-2][1]
+            lower_lows = confirmed_lows[-1][1] < confirmed_lows[-2][1]
+            if higher_highs and higher_lows:
+                structure_dir[i] = 1
+            elif lower_highs and lower_lows:
+                structure_dir[i] = -1
+
+    times = pd.to_datetime(df["time"]).astype("datetime64[ns]").reset_index(drop=True)
+    return pd.DataFrame({
+        "time": times + duration,
+        "swing_high": swing_high,
+        "swing_high_index": swing_high_index,
+        "swing_low": swing_low,
+        "swing_low_index": swing_low_index,
+        "structure_dir": structure_dir,
+    })
+
+
+def simulate_smc_structure_ob_fvg(
+    df_m15,
+    df_d1,
+    df_h4,
+    df_h2,
+    sym_cfg,
+    swing_bars=2,
+    max_ob_lookback=10,
+    max_swing_age=40,
+    setup_expiry_bars=32,
+    max_hold_bars=96,
+    tp_r=2.0,
+):
+    """
+    Research-only, deterministic proxy of the supplied SMC course outline.
+
+    Structure is a two-bar confirmed fractal. D1/H4/H2 must agree on two
+    successive higher highs/lows or lower highs/lows. M15 requires a close
+    through the latest confirmed swing (BOS), the last opposing candle in the
+    preceding 10 bars (OB), and a three-candle FVG on the BOS bar. After BOS,
+    a newly confirmed M15 swing must be swept and then the OB retested with a
+    directional candle. Entry is next-bar open; stop is beyond the OB/sweep
+    extreme plus spread; target is fixed at 2R. Ambiguous stop/target bars
+    count as stop-first. This is a fixed testable interpretation, not a claim
+    to reproduce discretionary course rules exactly.
+    """
+    frames = [df_m15, df_d1, df_h4, df_h2]
+    if any(frame is None or len(frame) < (2 * swing_bars + 2) for frame in frames):
+        return []
+
+    entry = df_m15.copy().sort_values("time").drop_duplicates("time").reset_index(drop=True)
+    entry["time"] = pd.to_datetime(entry["time"]).astype("datetime64[ns]")
+    entry_close_times = entry["time"] + TF_MAP["M15"][1]
+
+    merged = entry.copy()
+    merged["close_time"] = entry_close_times
+    for frame, timeframe, col in (
+        (df_d1, "D1", "d1_dir"),
+        (df_h4, "H4", "h4_dir"),
+        (df_h2, "H2", "h2_dir"),
+    ):
+        frame = frame.copy().sort_values("time").reset_index(drop=True)
+        frame["time"] = pd.to_datetime(frame["time"]).astype("datetime64[ns]")
+        structure = _confirmed_smc_structure(frame, timeframe, swing_bars)
+        structure = structure[["time", "structure_dir"]].rename(columns={"structure_dir": col})
+        merged = pd.merge_asof(
+            merged.sort_values("close_time"),
+            structure.sort_values("time"),
+            left_on="close_time",
+            right_on="time",
+            direction="backward",
+        )
+        merged = merged.drop(columns=["time_y"], errors="ignore").rename(columns={"time_x": "time"})
+
+    entry_structure = _confirmed_smc_structure(entry, "M15", swing_bars)
+    merged = merged.reset_index(drop=True)
+    entry_structure = entry_structure.reset_index(drop=True)
+    opens = merged["open"].to_numpy(dtype=float)
+    highs = merged["high"].to_numpy(dtype=float)
+    lows = merged["low"].to_numpy(dtype=float)
+    closes = merged["close"].to_numpy(dtype=float)
+    times = pd.to_datetime(merged["time"]).to_numpy()
+    spreads = merged["spread"].to_numpy(dtype=float) if "spread" in merged.columns else np.zeros(len(merged))
+
+    point = sym_cfg["point"]
+    spread_est = sym_cfg["spread_est"]
+    contract_size = sym_cfg["contract_size"]
+    trades = []
+    active_exit_idx = -1
+    n = len(merged)
+
+    def aligned_direction(i):
+        directions = [
+            int(value) if pd.notna(value) else 0
+            for value in (merged.iloc[i][key] for key in ("d1_dir", "h4_dir", "h2_dir"))
+        ]
+        return directions[0] if directions[0] != 0 and directions.count(directions[0]) == 3 else 0
+
+    for i in range(max(2 * swing_bars + 2, 1), n - 1):
+        if i <= active_exit_idx:
+            continue
+        direction = aligned_direction(i)
+        if direction == 0:
+            continue
+
+        prior_structure = entry_structure.iloc[i - 1]
+        swing_value = prior_structure["swing_high"] if direction == 1 else prior_structure["swing_low"]
+        swing_idx = int(prior_structure["swing_high_index"] if direction == 1 else prior_structure["swing_low_index"])
+        if not np.isfinite(swing_value) or swing_idx < 0 or i - swing_idx > max_swing_age:
+            continue
+
+        bos = closes[i] > swing_value if direction == 1 else closes[i] < swing_value
+        fvg = (
+            highs[i - 2] < lows[i]
+            if direction == 1
+            else lows[i - 2] > highs[i]
+        )
+        if not bos or not fvg:
+            continue
+
+        ob_idx = None
+        start = max(0, i - max_ob_lookback)
+        for candidate in range(i - 1, start - 1, -1):
+            opposing = closes[candidate] < opens[candidate] if direction == 1 else closes[candidate] > opens[candidate]
+            if opposing:
+                ob_idx = candidate
+                break
+        if ob_idx is None:
+            continue
+
+        ob_high, ob_low = highs[ob_idx], lows[ob_idx]
+        swept_at = None
+        sweep_extreme = None
+        tap_idx = None
+        end = min(n - 1, i + setup_expiry_bars + 1)
+        for j in range(i + 1, end):
+            if direction == 1 and closes[j] < ob_low:
+                break
+            if direction == -1 and closes[j] > ob_high:
+                break
+
+            known_structure = entry_structure.iloc[j - 1]
+            if swept_at is None:
+                liquidity = known_structure["swing_low"] if direction == 1 else known_structure["swing_high"]
+                liquidity_idx = int(known_structure["swing_low_index"] if direction == 1 else known_structure["swing_high_index"])
+                if liquidity_idx <= i or not np.isfinite(liquidity):
+                    continue
+                swept = (lows[j] < liquidity and closes[j] > liquidity) if direction == 1 else (highs[j] > liquidity and closes[j] < liquidity)
+                if swept:
+                    swept_at = j
+                    sweep_extreme = lows[j] if direction == 1 else highs[j]
+                continue
+
+            sweep_extreme = min(sweep_extreme, lows[j]) if direction == 1 else max(sweep_extreme, highs[j])
+            overlaps_ob = lows[j] <= ob_high and highs[j] >= ob_low
+            midpoint = (ob_high + ob_low) / 2.0
+            rejection = closes[j] > midpoint and closes[j] > opens[j] if direction == 1 else closes[j] < midpoint and closes[j] < opens[j]
+            if overlaps_ob and rejection:
+                tap_idx = j
+                break
+        if tap_idx is None:
+            continue
+
+        entry_idx = tap_idx + 1
+        entry_price = opens[entry_idx]
+        spread_price = max(spreads[entry_idx] * point, spread_est)
+        stop = min(ob_low, sweep_extreme) - spread_price if direction == 1 else max(ob_high, sweep_extreme) + spread_price
+        stop_dist = abs(entry_price - stop)
+        if stop_dist <= 0:
+            continue
+        target = entry_price + direction * stop_dist * tp_r
+        cost_price = spread_price * (1.0 + SLIPPAGE_FRACTION)
+        cost_r = cost_price / stop_dist
+
+        exit_idx = min(entry_idx + max_hold_bars, n - 1)
+        exit_price = closes[exit_idx]
+        exit_reason = "TIMEOUT"
+        for j in range(entry_idx, min(entry_idx + max_hold_bars + 1, n)):
+            sl_hit = lows[j] <= stop if direction == 1 else highs[j] >= stop
+            tp_hit = highs[j] >= target if direction == 1 else lows[j] <= target
+            if sl_hit:
+                exit_idx, exit_price = j, stop
+                exit_reason = "SL_TIE" if tp_hit else "SL"
+                break
+            if tp_hit:
+                exit_idx, exit_price = j, target
+                exit_reason = "TP"
+                break
+        else:
+            exit_idx = min(entry_idx + max_hold_bars, n - 1)
+            exit_price = closes[exit_idx]
+
+        gross_r = (exit_price - entry_price) * direction / stop_dist
+        net_r = gross_r - cost_r
+        pnl_usd = (exit_price - entry_price) * direction * contract_size * 0.01 - cost_price * contract_size * 0.01
+        trades.append({
+            "entry_bar": entry_idx,
+            "exit_bar": exit_idx,
+            "entry_time": pd.Timestamp(times[entry_idx]),
+            "exit_time": pd.Timestamp(times[exit_idx]),
+            "dir": direction,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "stop_dist": stop_dist,
+            "sl": stop,
+            "tp": target,
+            "gross_r": gross_r,
+            "net_r": net_r,
+            "pnl_usd": pnl_usd,
+            "exit_reason": exit_reason,
+            "bos_bar": i,
+            "ob_bar": ob_idx,
+            "liquidity_sweep_bar": swept_at,
+            "retest_bar": tap_idx,
+        })
+        active_exit_idx = exit_idx
+
+    return trades
+
+
 # ==============================================================================
 # 6. EVALUATION SUITE (DEV 5-BLOCK & LOCKBOX)
 # ==============================================================================
@@ -1341,7 +1593,7 @@ def run_research():
             print(f"⚠️ Symbol {sym} not accessible.")
             continue
         data_cache[sym] = {}
-        for tf in ["M5", "M15", "H1", "H4", "D1"]:
+        for tf in ["M5", "M15", "H1", "H2", "H4", "D1"]:
             df = fetch_tf_rates(resolved, tf)
             if df is not None:
                 data_cache[sym][tf] = df
@@ -1356,8 +1608,8 @@ def run_research():
     trade_collections = {}
 
     for var_id, var_cfg in variants.items():
-        if var_id not in ["V0", "V1", "V2", "V3", "V4", "V5", "V6", "V7"]:
-            continue  # Max 8 variants
+        if var_id not in ["V0", "V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8"]:
+            continue  # Max 9 variants
 
         for sym_cfg in TARGET_SYMBOLS:
             sym = sym_cfg["name"]
@@ -1393,6 +1645,22 @@ def run_research():
             elif stype == "cr_model_9am":
                 v7_stats = simulate_v7_cr_model(df_entry, sym_cfg)
                 trades = v7_stats["trades"]
+            elif stype == "smc_structure_ob_fvg":
+                htf_frames = [cache.get(tf) for tf in ("D1", "H4", "H2")]
+                if all(frame is not None for frame in htf_frames):
+                    trades = simulate_smc_structure_ob_fvg(
+                        df_entry,
+                        *htf_frames,
+                        sym_cfg,
+                        swing_bars=int(var_cfg["swing_bars"]),
+                        max_ob_lookback=int(var_cfg["max_ob_lookback"]),
+                        max_swing_age=int(var_cfg["max_swing_age"]),
+                        setup_expiry_bars=int(var_cfg["setup_expiry_bars"]),
+                        max_hold_bars=int(var_cfg["max_hold_bars"]),
+                        tp_r=float(var_cfg["tp_r"]),
+                    )
+                else:
+                    print(f"⚠️ Skipping {var_id} on {sym}: missing one or more D1/H4/H2 structure timeframes.")
 
             key = (var_id, sym)
             trade_collections[key] = trades
@@ -1416,7 +1684,7 @@ def run_research():
             dev_results.append(dev_metrics)
 
             # Log to registry.csv
-            params_str = f"{entry_tf}/{trend_tf or 'None'}_TP={var_cfg.get('tp_r')}R" if var_cfg.get('tp_r') else f"{entry_tf}_9amCR"
+            params_str = f"{entry_tf}/{','.join(var_cfg.get('trend_tfs', []))}_TP={var_cfg.get('tp_r')}R" if var_cfg.get("trend_tfs") else (f"{entry_tf}/{trend_tf or 'None'}_TP={var_cfg.get('tp_r')}R" if var_cfg.get('tp_r') else f"{entry_tf}_9amCR")
             res_str = f"Net={dev_metrics['net_exp']:+.3f}R,th_t={dev_metrics['thinned_t']:+.2f},folds={dev_metrics['positive_blocks']}/5,trades={dev_metrics['n_trades']},status={dev_metrics['status']}"
             log_to_registry(var_id, sym, params_str, res_str)
 
@@ -1475,7 +1743,7 @@ def generate_markdown_report(dev_results, finalist, lockbox_result):
     reg_count = get_registry_count()
 
     lines = [
-        f"# Phase 7 & 9 Strategy Research Report (Addenda 5 & 8)",
+        f"# Phase 7 & 9 Strategy Research Report (Addenda 5, 8 & 9)",
         f"",
         f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ",
         f"**Total Registry Counter:** {reg_count} honest attempts recorded  ",
@@ -1527,11 +1795,22 @@ def generate_markdown_report(dev_results, finalist, lockbox_result):
             f"> Time exit at 16:00 NY was added by the tester (not part of the original CR model video) to prevent indefinite overnight carry."
         ])
 
+    if any(r["variant"] == "V8" for r in dev_results):
+        lines.extend([
+            f"",
+            f"---",
+            f"",
+            f"## 3. Variant V8 (Mechanical SMC Research Proxy)",
+            f"",
+            f"> Fixed rules: confirmed two-bar D1/H4/H2 swing structure must align; M15 close BOS and same-bar FVG; last opposing candle in prior 10 bars defines OB; a post-BOS confirmed swing liquidity sweep must precede directional OB retest; next-bar entry; stop beyond OB/sweep extreme plus spread; 2R target; conservative stop-first ties and 96-bar time stop.",
+            f"> This is a deterministic approximation of the supplied course summary, not a claim to encode every discretionary course rule. Results include the harness spread/slippage model and remain research-only.",
+        ])
+
     lines.extend([
         f"",
         f"---",
         f"",
-        f"## 3. Lockbox Evaluation Protocol (Single Use)",
+        f"## 4. Lockbox Evaluation Protocol (Single Use)",
         f""
     ])
 
@@ -1564,7 +1843,7 @@ def generate_markdown_report(dev_results, finalist, lockbox_result):
         "",
         "---",
         "",
-        "## 4. Pre-Registered Variants Reference (8/8 Cap Full)",
+        "## 5. Pre-Registered Variants Reference (9/9 Cap Full)",
         "",
         "1. **V0 (Control):** M5 EMA9/21 cross/pullback, H1 trend, current filters, BE 0.9R, TP 1.8R (`XAUUSDm`, `BTCUSDm`).",
         "2. **V1:** M15 entry, H1 trend, no breakeven, stop 1.5 x ATR14, TP 1.8R (`XAUUSDm`, `BTCUSDm`).",
@@ -1574,6 +1853,7 @@ def generate_markdown_report(dev_results, finalist, lockbox_result):
         "6. **V5:** Session-open breakout (00-07 UTC range, 07-11 UTC entry on M15 close beyond range, stop opposite boundary [1,3] x ATR14, TP 1.5R, time exit 16:00 UTC, max 1 trade/day) (`XAUUSDm` ONLY).",
         "7. **V6:** H1 mean reversion (RSI14 < 30 / > 70 when H1 ADX14 < 20, stop 1.5 x ATR14, TP 1.0R, exit after 24 bars) (`XAUUSDm`, `BTCUSDm`).",
         "8. **V7:** 9am CR model (08:00 NY range, M1 09:00-10:00 NY setup window, first touch bias, Bullish/Bearish FVG + IFVG + OB confirmation, entry next bar open, stop at swing extreme + spread, target opposite 08:00 range, time exit 16:00 NY, max 1 trade/day) (`XAUUSDm`, `BTCUSDm`).",
+        "9. **V8:** Mechanical SMC proxy using D1/H4/H2 structure alignment, M15 BOS + FVG, OB, post-BOS liquidity sweep and retest, next-bar entry, stop beyond OB/sweep extreme, 2R target, 96-bar time stop (`XAUUSDm`, `BTCUSDm`). Research-only; see the V8 section for explicit rules.",
         ""
     ])
 

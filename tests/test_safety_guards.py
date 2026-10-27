@@ -6,6 +6,10 @@ import pandas as pd
 from bot import (
     MAX_OPEN_POSITIONS_PER_SYMBOL,
     check_daily_loss_guard,
+    _is_demo_account,
+    _try_v7_demo_entry,
+    _fetch_v7_live_signal,
+    _close_v7_positions_at_session_end,
     _record_entry_diagnostic,
     _daily_guard_cache,
     _is_bot_magic
@@ -30,6 +34,49 @@ def test_magic_range_filter():
     # Manual or other trades
     assert _is_bot_magic(0) is False
     assert _is_bot_magic(109999) is False
+
+
+def test_v7_is_demo_only_and_fails_closed(monkeypatch):
+    assert _is_demo_account(SimpleNamespace(trade_mode=0)) is True
+    assert _is_demo_account(SimpleNamespace(trade_mode=2)) is False
+    assert _is_demo_account(None) is False
+
+    monkeypatch.setattr(bot.mt5, "account_info", lambda: SimpleNamespace(trade_mode=2))
+    asset_data = {"config": {}}
+    _try_v7_demo_entry("XAUUSDm", asset_data, pd.Timestamp("2026-10-27 12:00"))
+
+    assert asset_data["entry_diagnostics"]["last_reason"] == "v7_demo_only"
+
+
+def test_v7_skips_reprocessing_the_same_m1_bar(monkeypatch):
+    current_time = int(pd.Timestamp("2026-10-27 13:00:00", tz="UTC").timestamp())
+    current_rates = [{"time": current_time}]
+    monkeypatch.setattr(
+        bot.mt5,
+        "copy_rates_from_pos",
+        lambda symbol, timeframe, start, count: current_rates if count == 1 else pytest.fail("Reprocessed cached M1 bar"),
+    )
+
+    bar_time, signal = _fetch_v7_live_signal(
+        "XAUUSDm",
+        {"name": "XAUUSDm"},
+        last_processed_bar=pd.Timestamp("2026-10-27 13:00:00"),
+    )
+
+    assert bar_time == pd.Timestamp("2026-10-27 13:00:00")
+    assert signal is None
+
+
+def test_v7_time_exit_never_sends_from_non_demo_account(monkeypatch):
+    monkeypatch.setattr(bot.mt5, "account_info", lambda: SimpleNamespace(trade_mode=2))
+    monkeypatch.setattr(bot.mt5, "positions_get", lambda **kwargs: pytest.fail("Queried live positions"))
+    monkeypatch.setattr(bot.mt5, "order_send", lambda request: pytest.fail("Sent a live V7 close"))
+
+    _close_v7_positions_at_session_end(
+        "XAUUSDm",
+        {"magic_base": 101000},
+        now_ny=datetime(2026, 10, 27, 16, 1, tzinfo=bot.NY_TZ),
+    )
 
 
 def test_position_limit_clamped():

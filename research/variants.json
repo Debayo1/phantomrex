@@ -104,5 +104,19 @@
     "max_trades_per_day": 1,
     "symbols": ["XAUUSDm", "BTCUSDm"],
     "description": "9am CR model: 08:00 NY H1 reference range, M1 setup window 09:00-10:00 NY, bias from first touch, Bullish/Bearish FVG + IFVG + OB confirmation, entry next bar open, stop at swing high/low + spread, target opposite 08:00 range, close at 16:00 NY"
+  },
+  "V8": {
+    "name": "SMC Structure / OB / FVG / Liquidity (D1-H4-H2, M15 entry)",
+    "entry_tf": "M15",
+    "trend_tfs": ["D1", "H4", "H2"],
+    "strategy_type": "smc_structure_ob_fvg",
+    "swing_bars": 2,
+    "max_ob_lookback": 10,
+    "max_swing_age": 40,
+    "setup_expiry_bars": 32,
+    "max_hold_bars": 96,
+    "tp_r": 2.0,
+    "symbols": ["XAUUSDm", "BTCUSDm"],
+    "description": "Mechanical research proxy of the supplied SMC outline: aligned D1/H4/H2 HH-HL or LH-LL structure; M15 close BOS; last opposing candle as OB; BOS-bar FVG; post-BOS confirmed swing liquidity sweep; directional OB retest; next-bar entry; OB/sweep extreme stop; fixed 2R target; 96-bar time stop. Research-only; rules are explicit approximations, not a claim to exactly reproduce the course."
   }
 }

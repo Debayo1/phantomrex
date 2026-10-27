@@ -15,8 +15,9 @@ import zoneinfo
 from datetime import datetime, timedelta
 
 from research.run_research import (
-    simulate_v7_cr_model, convert_utc_to_ny, TARGET_SYMBOLS
+    simulate_v7_cr_model, convert_utc_to_ny, fetch_m1_chunked, TARGET_SYMBOLS
 )
+import research.run_research as research_runner
 
 
 def test_v7_dst_transition_timezone_conversion():
@@ -51,6 +52,58 @@ def test_v7_dst_transition_timezone_conversion():
     dt_nov_ny = convert_utc_to_ny(dt_nov_utc)
     assert dt_nov_ny.hour == 8
     assert dt_nov_ny.utcoffset() == timedelta(hours=-5)
+
+
+def test_m1_history_fetch_uses_utc_for_mt5_requests(monkeypatch):
+    oldest_epoch = 1_798_000_000
+    calls = []
+
+    def fake_copy_rates_from(symbol, timeframe, request_time, count):
+        calls.append(request_time)
+        if len(calls) == 1:
+            timestamps = [oldest_epoch, oldest_epoch + 60]
+        else:
+            timestamps = [oldest_epoch - 60]
+        return np.array(
+            [(timestamp, 1.0, 2.0, 0.5, 1.5, 10, 0, 0) for timestamp in timestamps],
+            dtype=[
+                ("time", "i8"),
+                ("open", "f8"),
+                ("high", "f8"),
+                ("low", "f8"),
+                ("close", "f8"),
+                ("tick_volume", "i8"),
+                ("spread", "i4"),
+                ("real_volume", "i8"),
+            ],
+        )
+
+    monkeypatch.setattr(research_runner.mt5, "copy_rates_from", fake_copy_rates_from)
+
+    result = fetch_m1_chunked("TEST", max_chunks=2, chunk_size=2)
+
+    assert len(calls) == 2
+    assert all(request_time.tzinfo is not None for request_time in calls)
+    assert all(request_time.utcoffset() == timedelta(0) for request_time in calls)
+    assert calls[1] == datetime.fromtimestamp(oldest_epoch - 1, zoneinfo.ZoneInfo("UTC"))
+    assert result is not None
+    assert result["time"].dt.tz is None
+
+
+def test_paper_logger_recent_window_uses_new_york_calendar():
+    from research.paper_logger_v7 import _filter_recent_trades
+
+    now_utc = datetime(2026, 10, 28, 2, 0, tzinfo=zoneinfo.ZoneInfo("UTC"))
+    trades = [
+        {"entry_time": pd.Timestamp("2026-10-27 09:30", tz="America/New_York")},
+        {"entry_time": pd.Timestamp("2026-10-26 09:30", tz="America/New_York")},
+    ]
+
+    recent = _filter_recent_trades(trades, days_back=0, now=now_utc)
+
+    assert [trade["entry_time"].date() for trade in recent] == [
+        datetime(2026, 10, 27).date()
+    ]
 
 
 def test_v7_dual_touch_single_bar_skipped():
