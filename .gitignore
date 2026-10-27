@@ -15,6 +15,7 @@ economic_calendar_cache.json
 backtest_trades.csv
 reports/*.json
 FIX_PLAN.md
+runtime_data/
 
 # Secrets & Local Databases (Untracked)
 telegram_config.json

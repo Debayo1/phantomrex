@@ -1,8 +1,10 @@
 import os
 import json
+import csv
 import numpy as np
 import pytest
 
+import train_model
 from train_model import (
     get_history_candle_counts,
     DEFAULT_CANDLES_LOW,
@@ -43,6 +45,30 @@ def test_configurable_history_defaults_and_env_override(monkeypatch):
     monkeypatch.setenv("CANDLES_LOW", "invalid")
     low, high = get_history_candle_counts()
     assert low == DEFAULT_CANDLES_LOW
+
+
+def test_retrain_registry_writes_to_runtime_data(tmp_path, monkeypatch):
+    registry_path = tmp_path / "runtime_data" / "retrain_registry.csv"
+    monkeypatch.setattr(train_model, "RETRAIN_REGISTRY_FILE", str(registry_path))
+    chosen = {
+        "n_holdout": 12,
+        "holdout_net": {"exp": -0.1},
+        "net": {"exp": 0.05},
+        "thinned": {"t": 0.4},
+        "positive_folds": 2,
+        "n_folds": 5,
+        "edge_ok": False,
+        "status": "INSUFFICIENT_DATA",
+    }
+
+    train_model.log_retrain_to_registry("XAUUSDm", 40000, 6000, chosen)
+
+    with registry_path.open("r", newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+    assert rows[0] == ["date", "variant", "params", "dev_result", "pass_fail"]
+    assert len(rows) == 2
+    assert rows[1][2] == "40000M5_6000H1_XAUUSDm"
+    assert "INSUFFICIENT_DATA" in rows[1][4]
 
 
 def test_split_dev_holdout_math():

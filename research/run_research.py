@@ -8,7 +8,7 @@ Hard Isolation Rules (H1):
   - NEVER writes to *_ai_model.pkl, .prev.pkl, or .candidate.pkl.
   - NEVER promotes models to live trading.
   - All parameters fixed. Zero parameter tuning or grid searching.
-  - All runs (passed and failed) logged to research/registry.csv.
+  - All runs (passed and failed) logged to ignored runtime_data/strategy_registry.csv.
 """
 
 import os
@@ -30,8 +30,9 @@ if hasattr(sys.stdout, "reconfigure"):
 
 # Ensure paths
 RESEARCH_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(RESEARCH_DIR)
 VARIANTS_FILE = os.path.join(RESEARCH_DIR, "variants.json")
-REGISTRY_FILE = os.path.join(RESEARCH_DIR, "registry.csv")
+REGISTRY_FILE = os.path.join(BASE_DIR, "runtime_data", "strategy_registry.csv")
 
 TARGET_SYMBOLS = [
     {"name": "XAUUSDm", "min_stop_dist": 1.50, "spread_est": 0.25, "contract_size": 100.0, "point": 0.001},
@@ -76,9 +77,9 @@ def assert_safe_environment():
 
 
 def ensure_registry_initialized():
-    """Initializes research/registry.csv with headers if it does not exist."""
+    """Initializes the local runtime registry if it does not exist."""
     if not os.path.exists(REGISTRY_FILE):
-        os.makedirs(RESEARCH_DIR, exist_ok=True)
+        os.makedirs(os.path.dirname(REGISTRY_FILE), exist_ok=True)
         with open(REGISTRY_FILE, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["date", "batch", "variant", "symbol", "params", "result", "note"])
@@ -86,7 +87,7 @@ def ensure_registry_initialized():
 
 def log_to_registry(variant, arg2, arg3, arg4=None, batch="", note=""):
     """
-    Logs an attempt to research/registry.csv (H1).
+    Logs an attempt to the local runtime registry (H1).
     Flexible signature:
       log_to_registry(variant, symbol, params, result, batch="", note="")
       OR log_to_registry(variant, params, result, pass_fail) [legacy test compatibility]
@@ -115,7 +116,7 @@ def log_to_registry(variant, arg2, arg3, arg4=None, batch="", note=""):
 
 
 def get_registry_count():
-    """Returns total rows recorded in registry.csv (excluding header)."""
+    """Returns total rows recorded in the local runtime registry (excluding header)."""
     ensure_registry_initialized()
     with open(REGISTRY_FILE, "r", encoding="utf-8") as f:
         reader = list(csv.reader(f))

@@ -231,6 +231,12 @@ def test_registry_count_increases_for_every_run(tmp_path, monkeypatch):
         assert "PASS" in reader[3][5]
 
 
+def test_runtime_registry_is_outside_tracked_research_directory():
+    """Runtime research writes must not target the tracked seed registry."""
+    assert os.path.basename(os.path.dirname(REGISTRY_FILE)) == "runtime_data"
+    assert os.path.basename(REGISTRY_FILE) == "strategy_registry.csv"
+
+
 def test_variants_json_max_eight_pre_registered():
     """H7.6: Verify variants.json exists, defines the 8 variants V0-V7 (cap full)."""
     assert os.path.exists(VARIANTS_FILE)

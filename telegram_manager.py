@@ -1518,17 +1518,62 @@ class TelegramBotManager:
 
             bot.reply_to(message, "📥 <b>Checking for updates from GitHub...</b>")
             try:
-                # Automatically stash local runtime changes (e.g. registry.csv or logs) so pull is never blocked
-                subprocess.run([git_bin, "stash"], cwd=project_dir, capture_output=True, text=True, timeout=15)
+                stash_res = subprocess.run(
+                    [git_bin, "stash", "push", "-m", "preserve local changes before bot update"],
+                    cwd=project_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                if stash_res.returncode != 0:
+                    out = (stash_res.stdout + stash_res.stderr).strip()
+                    bot.reply_to(
+                        message,
+                        "⚠️ <b>Update cancelled:</b> Git could not preserve local changes in a stash.\n\n"
+                        f"<pre>{out[:400]}</pre>",
+                    )
+                    return
+
+                status_res = subprocess.run(
+                    [git_bin, "status", "--porcelain"],
+                    cwd=project_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                if status_res.returncode != 0 or status_res.stdout.strip():
+                    out = (status_res.stdout + status_res.stderr).strip()
+                    bot.reply_to(
+                        message,
+                        "⚠️ <b>Update cancelled:</b> The working tree is not clean after stashing. "
+                        "No pull was attempted; inspect and preserve these files first.\n\n"
+                        f"<pre>{out[:400]}</pre>",
+                    )
+                    return
+
                 res = subprocess.run([git_bin, "pull"], cwd=project_dir, capture_output=True, text=True, timeout=30)
                 out = (res.stdout + res.stderr).strip()
                 if "Already up to date" in out:
-                    bot.reply_to(message, "✅ <b>System is already up to date.</b>")
+                    bot.reply_to(
+                        message,
+                        "✅ <b>System is already up to date.</b>\n"
+                        "Any local tracked changes remain preserved in Git stash; do not pop them over changed files.",
+                    )
                 elif res.returncode == 0:
-                    bot.reply_to(message, f"🎉 <b>Update downloaded!</b>\n\n<pre>{out[:300]}</pre>\n\n🔄 Restarting engine now...")
+                    bot.reply_to(
+                        message,
+                        f"🎉 <b>Update downloaded!</b>\n\n<pre>{out[:300]}</pre>\n\n"
+                        "Any local tracked changes remain preserved in Git stash. "
+                        "Do not pop them over changed files; merge needed data manually.\n\n"
+                        "🔄 Restarting engine now...",
+                    )
                     self.trigger_restart(delay=2.0)
                 else:
-                    bot.reply_to(message, f"⚠️ <b>Git pull reported an issue:</b>\n\n<pre>{out[:400]}</pre>")
+                    bot.reply_to(
+                        message,
+                        f"⚠️ <b>Git pull reported an issue:</b>\n\n<pre>{out[:400]}</pre>\n\n"
+                        "Local tracked changes remain preserved in Git stash.",
+                    )
             except Exception as ex:
                 bot.reply_to(message, f"❌ Update error: {ex}")
 

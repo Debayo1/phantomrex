@@ -724,6 +724,34 @@ def _apply_model_package(asset_entry, pkg, cfg):
     asset_entry["no_edge_warned"] = False
 
 
+def _record_entry_diagnostic(asset_entry, reason, candle_time=None, detail=None):
+    """Track entry-gate outcomes once per closed candle without changing trade decisions."""
+    diagnostics = asset_entry.setdefault("entry_diagnostics", {
+        "counts": {},
+        "bar": None,
+        "bar_reasons": set(),
+        "state": None,
+        "last_reason": "not_checked",
+        "last_detail": "",
+    })
+
+    if candle_time is None:
+        if diagnostics["state"] != reason:
+            diagnostics["counts"][reason] = diagnostics["counts"].get(reason, 0) + 1
+        diagnostics["state"] = reason
+    else:
+        diagnostics["state"] = None
+        if diagnostics["bar"] != candle_time:
+            diagnostics["bar"] = candle_time
+            diagnostics["bar_reasons"] = set()
+        if reason not in diagnostics["bar_reasons"]:
+            diagnostics["counts"][reason] = diagnostics["counts"].get(reason, 0) + 1
+            diagnostics["bar_reasons"].add(reason)
+
+    diagnostics["last_reason"] = reason
+    diagnostics["last_detail"] = detail or ""
+
+
 def reload_ai_models(target_symbol=None):
     """
     Hot-reloads trained models from disk into the running trading engine in memory without downtime.
@@ -778,7 +806,15 @@ def run_live():
             "trend_mode": DEFAULT_TREND_MODE,
             "edge_ok": False,
             "no_edge_warned": False,
-            "last_traded_bar": None
+            "last_traded_bar": None,
+            "entry_diagnostics": {
+                "counts": {},
+                "bar": None,
+                "bar_reasons": set(),
+                "state": None,
+                "last_reason": "not_checked",
+                "last_detail": "",
+            }
         }
 
         if os.path.exists(cfg["model_file"]):
@@ -823,13 +859,52 @@ def run_live():
 
                 df = fetch_data(symbol, count_m5=300, count_h1=400, trend_mode=asset_data.get("trend_mode", DEFAULT_TREND_MODE))
                 if df is None or len(df) < 5:
+                    _record_entry_diagnostic(
+                        asset_data,
+                        "data_unavailable",
+                        detail="Could not fetch enough M5/H1 candles",
+                    )
                     continue
 
+                asset_data["entry_diagnostics"]["state"] = None
                 live_candle = df.iloc[-1]       # still forming -> only for live price / trade management
                 last_candle = df.iloc[-2]       # last CLOSED candle -> all entry decisions
                 prev_candle = df.iloc[-3]
                 candle_time = last_candle["time"]
                 price = last_candle["close"]
+
+                crossover_buy = (prev_candle["m5_ema9"] <= prev_candle["m5_ema21"] and last_candle["m5_ema9"] > last_candle["m5_ema21"])
+                pullback_buy = (last_candle["m5_ema9"] > last_candle["m5_ema21"] and prev_candle["low"] <= prev_candle["m5_ema21"] and last_candle["close"] > last_candle["m5_ema9"] and last_candle["close"] > last_candle["open"])
+
+                crossover_sell = (prev_candle["m5_ema9"] >= prev_candle["m5_ema21"] and last_candle["m5_ema9"] < last_candle["m5_ema21"])
+                pullback_sell = (last_candle["m5_ema9"] < last_candle["m5_ema21"] and prev_candle["high"] >= prev_candle["m5_ema21"] and last_candle["close"] < last_candle["m5_ema9"] and last_candle["close"] < last_candle["open"])
+
+                buy_signal = (
+                    last_candle["h1_trend"] == 1
+                    and (crossover_buy or pullback_buy)
+                    and 40 <= last_candle["m5_rsi"] <= 68
+                )
+
+                sell_signal = (
+                    last_candle["h1_trend"] == -1
+                    and (crossover_sell or pullback_sell)
+                    and 32 <= last_candle["m5_rsi"] <= 60
+                )
+                if buy_signal or sell_signal:
+                    setup_direction = "BUY" if buy_signal else "SELL"
+                    _record_entry_diagnostic(
+                        asset_data,
+                        "strategy_setup",
+                        candle_time,
+                        f"{setup_direction} setup passed trend, EMA, and RSI rules",
+                    )
+                else:
+                    _record_entry_diagnostic(
+                        asset_data,
+                        "no_strategy_setup",
+                        candle_time,
+                        "No EMA/trend/RSI entry pattern on this closed M5 bar",
+                    )
 
                 # 1. Manage Active Positions
                 manage_active_trades(symbol, cfg, live_candle, last_candle)
@@ -852,53 +927,52 @@ def run_live():
                 # Daily loss guard (applied identically on both Live and Demo)
                 blocked, _reason = check_daily_loss_guard()
                 if blocked:
+                    _record_entry_diagnostic(asset_data, "daily_loss_guard", candle_time, _reason)
                     continue
 
                 # High-Impact Economic News Shield (pauses new entries during high-impact USD events)
                 if tg_manager.settings.get("news_filter_enabled", True):
                     is_news_blocked, news_summary, _ = news_filter.check_news_block()
                     if is_news_blocked:
+                        _record_entry_diagnostic(asset_data, "news_filter", candle_time, news_summary)
                         if print_heartbeat:
                             print(f"🛑 [NEWS SHIELD] {symbol}: New entries paused due to {news_summary}")
                         continue
 
                 max_open = min(int(tg_manager.settings.get("max_positions", MAX_OPEN_POSITIONS_PER_SYMBOL)), 3)
                 if len(open_positions) >= max_open:
+                    _record_entry_diagnostic(
+                        asset_data,
+                        "position_limit",
+                        candle_time,
+                        f"{len(open_positions)} positions open; configured limit is {max_open}",
+                    )
                     continue
 
                 if candle_time == asset_data["last_traded_bar"]:
+                    _record_entry_diagnostic(asset_data, "bar_already_traded", candle_time)
                     continue
 
                 if last_candle["h1_adx"] < MIN_ADX:
+                    _record_entry_diagnostic(
+                        asset_data,
+                        "adx_filter",
+                        candle_time,
+                        f"H1 ADX {last_candle['h1_adx']:.1f} below minimum {MIN_ADX}",
+                    )
                     continue
 
                 # Phase 1.1: Strict edge enforcement (Ground Rules 8 & 9)
                 if ai_model is None or not asset_data.get("edge_ok", False):
+                    reason = "model_missing" if ai_model is None else "model_edge_not_validated"
+                    detail = "No model loaded" if ai_model is None else "Model package has edge_ok=False"
+                    _record_entry_diagnostic(asset_data, reason, candle_time, detail)
                     if not asset_data.get("no_edge_warned", False):
                         asset_data["no_edge_warned"] = True
                         tg_manager.send_broadcast_alert(
                             f"⛔ <b>{symbol}:</b> No validated AI model with positive edge. New entries paused until /retrain passes."
                         )
                     continue
-
-                # 2. Strategy Triggers
-                crossover_buy = (prev_candle["m5_ema9"] <= prev_candle["m5_ema21"] and last_candle["m5_ema9"] > last_candle["m5_ema21"])
-                pullback_buy = (last_candle["m5_ema9"] > last_candle["m5_ema21"] and prev_candle["low"] <= prev_candle["m5_ema21"] and last_candle["close"] > last_candle["m5_ema9"] and last_candle["close"] > last_candle["open"])
-
-                crossover_sell = (prev_candle["m5_ema9"] >= prev_candle["m5_ema21"] and last_candle["m5_ema9"] < last_candle["m5_ema21"])
-                pullback_sell = (last_candle["m5_ema9"] < last_candle["m5_ema21"] and prev_candle["high"] >= prev_candle["m5_ema21"] and last_candle["close"] < last_candle["m5_ema9"] and last_candle["close"] < last_candle["open"])
-
-                buy_signal = (
-                    last_candle["h1_trend"] == 1
-                    and (crossover_buy or pullback_buy)
-                    and 40 <= last_candle["m5_rsi"] <= 68
-                )
-
-                sell_signal = (
-                    last_candle["h1_trend"] == -1
-                    and (crossover_sell or pullback_sell)
-                    and 32 <= last_candle["m5_rsi"] <= 60
-                )
 
                 if buy_signal or sell_signal:
                     direction = 1 if buy_signal else -1
@@ -907,6 +981,12 @@ def run_live():
                     # Entry Guard: Overextension check
                     ema_dist = abs(price - last_candle["m5_ema9"])
                     if ema_dist > 1.4 * atr:
+                        _record_entry_diagnostic(
+                            asset_data,
+                            "overextension_filter",
+                            candle_time,
+                            f"Price is {ema_dist:.5f} from EMA9; limit is {1.4 * atr:.5f}",
+                        )
                         print(f"⏳ {symbol} Entry Guard: Price overextended (${price:.2f} vs EMA {last_candle['m5_ema9']:.2f}). Waiting for pullback.")
                         try:
                             db_ledger.log_signal(
@@ -940,9 +1020,21 @@ def run_live():
                             ai_approved = (win_prob >= active_thresh)
                         except Exception as e:
                             print(f"⚠️ {symbol} AI Inference error: {e}")
+                            _record_entry_diagnostic(
+                                asset_data,
+                                "ai_inference_error",
+                                candle_time,
+                                str(e),
+                            )
                             ai_approved = False
 
                     if not ai_approved:
+                        _record_entry_diagnostic(
+                            asset_data,
+                            "confidence_below_threshold",
+                            candle_time,
+                            f"Model score {win_prob:.3f}; required {active_thresh:.3f}",
+                        )
                         print(f"✋ {symbol} AI FILTERED: Win Confidence {win_prob*100:.1f}% < threshold {active_thresh*100:.0f}%. Setup skipped!")
                         asset_data["last_traded_bar"] = candle_time
                         try:
@@ -986,6 +1078,12 @@ def run_live():
                     print(f"   Price: ${price:.2f} | Confidence: {win_prob*100:.1f}% | Tier: {tier_label}")
                     print(f"   Stop Distance: ${stop_dist:.2f} | Total Risk: ${total_risk:.2f}")
 
+                    _record_entry_diagnostic(
+                        asset_data,
+                        "model_approved_order_attempted",
+                        candle_time,
+                        f"{setup_direction} score {win_prob:.3f} met threshold {active_thresh:.3f}",
+                    )
                     open_multi_target_batch(
                         symbol=symbol,
                         order_type=order_type,
@@ -1008,6 +1106,17 @@ def run_live():
 
             if print_heartbeat:
                 last_heartbeat = current_time
+                for symbol, asset_data in LOADED_ASSETS.items():
+                    diagnostics = asset_data["entry_diagnostics"]
+                    counts = diagnostics["counts"]
+                    count_summary = ", ".join(
+                        f"{name}={count}" for name, count in sorted(counts.items())
+                    ) or "no closed bars checked"
+                    detail = f" ({diagnostics['last_detail']})" if diagnostics["last_detail"] else ""
+                    print(
+                        f"[ENTRY CHECK] {symbol}: latest={diagnostics['last_reason']}{detail}; "
+                        f"bar counts: {count_summary}"
+                    )
                 try:
                     tg_manager.check_and_prompt_unprotected_trades()
                 except Exception:

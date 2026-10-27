@@ -37,6 +37,11 @@ CANDLES_LOW = DEFAULT_CANDLES_LOW
 CANDLES_HIGH = DEFAULT_CANDLES_HIGH
 
 CONFIG_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram_config.json")
+RETRAIN_REGISTRY_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "runtime_data",
+    "retrain_registry.csv",
+)
 
 
 def get_history_candle_counts():
@@ -408,14 +413,13 @@ def save_audit_report(report_data, output_path=None):
 
 def log_retrain_to_registry(symbol_name, candles_low, candles_high, chosen):
     """
-    Appends the retrain run to research/registry.csv (Addendum 7 / Phase 8 G2).
+    Appends the retrain run to the local runtime registry, outside tracked research files.
     Format: date,variant,params,dev_result,pass_fail
     """
-    registry_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "research", "registry.csv")
-    if not os.path.exists(os.path.dirname(registry_path)):
-        os.makedirs(os.path.dirname(registry_path), exist_ok=True)
-    if not os.path.exists(registry_path):
-        with open(registry_path, "w", newline="", encoding="utf-8") as f:
+    if not os.path.exists(os.path.dirname(RETRAIN_REGISTRY_FILE)):
+        os.makedirs(os.path.dirname(RETRAIN_REGISTRY_FILE), exist_ok=True)
+    if not os.path.exists(RETRAIN_REGISTRY_FILE):
+        with open(RETRAIN_REGISTRY_FILE, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["date", "variant", "params", "dev_result", "pass_fail"])
 
@@ -439,10 +443,10 @@ def log_retrain_to_registry(symbol_name, candles_low, candles_high, chosen):
         else:
             pass_fail = "FAIL (no edge)"
 
-    with open(registry_path, "a", newline="", encoding="utf-8") as f:
+    with open(RETRAIN_REGISTRY_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([today_str, variant, params, dev_res, pass_fail])
-    print(f"📝 Logged retrain run to {registry_path}")
+    print(f"📝 Logged retrain run to {RETRAIN_REGISTRY_FILE}")
 
 
 def walk_forward(data):

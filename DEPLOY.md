@@ -33,3 +33,9 @@ Check that the bot connects to MT5 and starts polling Telegram before leaving th
 
 #### 5. Strict Graduation & Account Safety
 Before switching to real money trading, consult [GRADUATION.md](file:///c:/Users/HP%201030/Desktop/forexbot/GRADUATION.md) for the mandatory 50-trade demo evaluation gate and 0.01-lot size constraints.
+
+## Runtime Research Logs
+
+Research and retraining runs append to CSV files under `runtime_data/`, which is ignored by Git so VPS-generated results do not block or get overwritten by `git pull`. The tracked `research/registry.csv` is a historical seed/reference file and is no longer the destination for new runtime rows.
+
+Back up `runtime_data/` outside the repository before replacing or rebuilding the VPS checkout. Do not copy runtime logs back over the tracked seed registry. If migrating older VPS rows from a Git stash, preserve a backup and append/import those rows into the appropriate runtime log after updating; strategy and retraining logs use separate CSV schemas.

@@ -6,6 +6,7 @@ import pandas as pd
 from bot import (
     MAX_OPEN_POSITIONS_PER_SYMBOL,
     check_daily_loss_guard,
+    _record_entry_diagnostic,
     _daily_guard_cache,
     _is_bot_magic
 )
@@ -58,6 +59,37 @@ def test_edge_ok_false_blocks_entries():
     asset_data["edge_ok"] = True
     should_trade = bool(asset_data.get("model") and asset_data.get("edge_ok", False))
     assert should_trade is True
+
+
+def test_entry_diagnostics_count_each_gate_once_per_closed_bar():
+    asset_data = {}
+    bar_one = pd.Timestamp("2026-10-27 10:00:00")
+    bar_two = pd.Timestamp("2026-10-27 10:05:00")
+
+    _record_entry_diagnostic(asset_data, "strategy_setup", bar_one, "BUY setup")
+    _record_entry_diagnostic(asset_data, "strategy_setup", bar_one, "BUY setup")
+    _record_entry_diagnostic(asset_data, "model_edge_not_validated", bar_one, "edge_ok=False")
+    _record_entry_diagnostic(asset_data, "strategy_setup", bar_two, "SELL setup")
+
+    diagnostics = asset_data["entry_diagnostics"]
+    assert diagnostics["counts"] == {
+        "strategy_setup": 2,
+        "model_edge_not_validated": 1,
+    }
+    assert diagnostics["last_reason"] == "strategy_setup"
+    assert diagnostics["last_detail"] == "SELL setup"
+
+
+def test_entry_diagnostics_count_data_failure_transitions():
+    asset_data = {}
+
+    _record_entry_diagnostic(asset_data, "data_unavailable", detail="no candles")
+    _record_entry_diagnostic(asset_data, "data_unavailable", detail="no candles")
+    asset_data["entry_diagnostics"]["state"] = None
+    _record_entry_diagnostic(asset_data, "data_unavailable", detail="no candles")
+
+    diagnostics = asset_data["entry_diagnostics"]
+    assert diagnostics["counts"]["data_unavailable"] == 2
 
 
 def test_daily_loss_guard_blocks_when_limit_hit(monkeypatch):
