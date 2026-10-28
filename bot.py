@@ -66,6 +66,18 @@ TIMEFRAME_HIGH = mt5.TIMEFRAME_H1   # Macro trend timeframe (1-hour candles)
 V7_TIMEFRAME = mt5.TIMEFRAME_M1
 V7_M1_LOOKBACK = 1500
 V7_MAGIC_OFFSET = 10
+SMALL_PROFIT_DEMO_ENABLED = True
+SMALL_PROFIT_M1_LOOKBACK = 1500
+SMALL_PROFIT_M5_LOOKBACK = 400
+SMALL_PROFIT_TARGET_USD = 1.0
+SMALL_PROFIT_MAX_LOSS_USD = 5.0
+SMALL_PROFIT_MAX_HOLD_MINUTES = 30
+SMALL_PROFIT_MAX_POSITIONS_PER_SYMBOL = 3
+SMALL_PROFIT_MAGIC_OFFSETS = {
+    "Trend pullback": 7,
+    "Range fade": 8,
+    "M1 breakout": 9,
+}
 NY_TZ = ZoneInfo("America/New_York")
 UTC_TZ = ZoneInfo("UTC")
 
@@ -394,6 +406,301 @@ def _try_v7_demo_entry(symbol, asset_data, candle_time):
     )
 
 
+def _small_profit_demo_positions(symbol, cfg):
+    offsets = set(SMALL_PROFIT_MAGIC_OFFSETS.values())
+    return [
+        position
+        for position in (mt5.positions_get(symbol=symbol) or [])
+        if position.magic - cfg["magic_base"] in offsets
+    ]
+
+
+def _small_profit_traded_this_bar(symbol, magic, bar_time):
+    start = pd.Timestamp(bar_time).tz_localize("UTC").to_pydatetime()
+    deals = mt5.history_deals_get(start, start + timedelta(minutes=1))
+    if deals is None:
+        raise RuntimeError(f"Could not check small-profit trade history: {mt5.last_error()}")
+    return any(
+        getattr(deal, "symbol", None) == symbol
+        and getattr(deal, "magic", None) == magic
+        and getattr(deal, "entry", None) == mt5.DEAL_ENTRY_IN
+        for deal in deals
+    )
+
+
+def _manage_small_profit_demo_positions(symbol, cfg):
+    """Close only this experiment's demo positions after the 30-minute limit."""
+    if not _is_demo_account():
+        return
+    now_epoch = datetime.now(UTC_TZ).timestamp()
+    for position in _small_profit_demo_positions(symbol, cfg):
+        if now_epoch - float(position.time) < SMALL_PROFIT_MAX_HOLD_MINUTES * 60:
+            continue
+        if not _is_demo_account():
+            return
+        tick = mt5.symbol_info_tick(symbol)
+        if not tick:
+            print(f"⚠️ Small-profit timeout deferred for {symbol} #{position.ticket}: no current tick")
+            continue
+        order_type = (
+            mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY
+            else mt5.ORDER_TYPE_BUY
+        )
+        price = tick.bid if order_type == mt5.ORDER_TYPE_SELL else tick.ask
+        result = mt5.order_send({
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": position.volume,
+            "type": order_type,
+            "position": position.ticket,
+            "price": price,
+            "deviation": 30,
+            "magic": position.magic,
+            "comment": "SP_30m_Time_Exit",
+        })
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            detail = result.comment if result else mt5.last_error()
+            print(f"❌ Small-profit timeout failed for {symbol} #{position.ticket}: {detail}")
+        else:
+            print(f"⏰ Small-profit demo closed {symbol} #{position.ticket} at 30-minute limit")
+
+
+def _try_small_profit_demo_entries(symbol, asset_data):
+    """Run three capped $1-target experiments, with broker orders demo-only."""
+    if not SMALL_PROFIT_DEMO_ENABLED:
+        return
+    account = mt5.account_info()
+    if not _is_demo_account(account):
+        _record_entry_diagnostic(
+            asset_data,
+            "small_profit_demo_only",
+            detail="Small-profit entries require an MT5 demo account",
+        )
+        return
+    if str(getattr(account, "currency", "")).upper() != "USD":
+        _record_entry_diagnostic(
+            asset_data,
+            "small_profit_currency",
+            detail="Small-profit cash targets require a USD account",
+        )
+        return
+    hedging_mode = getattr(mt5, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", 2)
+    if getattr(account, "margin_mode", None) != hedging_mode:
+        _record_entry_diagnostic(
+            asset_data,
+            "small_profit_account_mode",
+            detail="Independent strategy tests require a hedging-mode demo account",
+        )
+        return
+
+    from small_profit_strategy import generate_signals
+
+    m1_rates = mt5.copy_rates_from_pos(symbol, V7_TIMEFRAME, 0, SMALL_PROFIT_M1_LOOKBACK)
+    m5_rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 0, SMALL_PROFIT_M5_LOOKBACK)
+    if m1_rates is None or len(m1_rates) < 60 or m5_rates is None or len(m5_rates) < 55:
+        _record_entry_diagnostic(
+            asset_data,
+            "small_profit_data_unavailable",
+            detail="Insufficient M1/M5 bars for candidate rules",
+        )
+        return
+
+    m1 = pd.DataFrame(m1_rates).sort_values("time").drop_duplicates("time").reset_index(drop=True)
+    m5 = pd.DataFrame(m5_rates).sort_values("time").drop_duplicates("time").reset_index(drop=True)
+    m1["time"] = pd.to_datetime(m1["time"], unit="s")
+    m5["time"] = pd.to_datetime(m5["time"], unit="s")
+    current_bar_time = pd.Timestamp(m1.iloc[-1]["time"])
+    if current_bar_time == asset_data.get("last_small_profit_bar"):
+        return
+    asset_data["last_small_profit_bar"] = current_bar_time
+
+    signals = generate_signals(m1, m5)
+    latest = signals[signals["signal_bar"] == len(m1) - 2]
+    if latest.empty:
+        _record_entry_diagnostic(
+            asset_data,
+            "small_profit_no_setup",
+            current_bar_time,
+            "No candidate setup on the latest closed M1 bar",
+        )
+        return
+
+    cfg = asset_data["config"]
+    info = mt5.symbol_info(symbol)
+    tick = mt5.symbol_info_tick(symbol)
+    if info is None or tick is None:
+        _record_entry_diagnostic(
+            asset_data,
+            "small_profit_market_data",
+            current_bar_time,
+            "Missing current tick or symbol metadata",
+        )
+        return
+    lot = MAX_LOT_CAP
+    if (
+        float(info.volume_min) > lot
+        or float(info.volume_step) <= 0
+        or abs(lot / float(info.volume_step) - round(lot / float(info.volume_step))) > 1e-8
+    ):
+        _record_entry_diagnostic(
+            asset_data,
+            "small_profit_volume_unavailable",
+            current_bar_time,
+            "Broker volume rules do not support the fixed 0.01-lot test size",
+        )
+        return
+
+    positions = mt5.positions_get(symbol=symbol) or []
+    open_magics = {position.magic for position in positions}
+    position_count = len(positions)
+    if position_count >= SMALL_PROFIT_MAX_POSITIONS_PER_SYMBOL:
+        _record_entry_diagnostic(
+            asset_data,
+            "small_profit_position_limit",
+            current_bar_time,
+            f"{position_count} positions open; experiment limit is {SMALL_PROFIT_MAX_POSITIONS_PER_SYMBOL}",
+        )
+        return
+    if tg_manager.settings.get("news_filter_enabled", True):
+        is_news_blocked, news_summary, _ = news_filter.check_news_block()
+        if is_news_blocked:
+            _record_entry_diagnostic(asset_data, "news_filter", current_bar_time, news_summary)
+            return
+    blocked, reason = check_daily_loss_guard()
+    if blocked:
+        _record_entry_diagnostic(asset_data, "daily_loss_guard", current_bar_time, reason)
+        return
+
+    for signal in latest.to_dict("records"):
+        strategy = signal["strategy"]
+        magic = cfg["magic_base"] + SMALL_PROFIT_MAGIC_OFFSETS[strategy]
+        if magic in open_magics:
+            continue
+        try:
+            if _small_profit_traded_this_bar(symbol, magic, current_bar_time):
+                continue
+        except RuntimeError as exc:
+            _record_entry_diagnostic(
+                asset_data,
+                "small_profit_history_unavailable",
+                current_bar_time,
+                str(exc),
+            )
+            continue
+        positions = mt5.positions_get(symbol=symbol) or []
+        open_magics = {position.magic for position in positions}
+        position_count = len(positions)
+        if position_count >= SMALL_PROFIT_MAX_POSITIONS_PER_SYMBOL:
+            break
+        direction = int(signal["direction"])
+        order_type = mt5.ORDER_TYPE_BUY if direction > 0 else mt5.ORDER_TYPE_SELL
+        entry = float(tick.ask if direction > 0 else tick.bid)
+        stop = round(float(signal["stop"]), int(info.digits))
+        exposure = lot * float(info.trade_contract_size)
+        if exposure <= 0:
+            _record_entry_diagnostic(
+                asset_data,
+                "small_profit_contract_invalid",
+                current_bar_time,
+                f"Invalid contract size for {symbol}",
+            )
+            continue
+        target = round(
+            entry + direction * SMALL_PROFIT_TARGET_USD / exposure,
+            int(info.digits),
+        )
+        if (
+            (direction > 0 and not stop < entry < target)
+            or (direction < 0 and not target < entry < stop)
+        ):
+            _record_entry_diagnostic(
+                asset_data,
+                "small_profit_invalid_levels",
+                current_bar_time,
+                f"{strategy} stop/target is invalid at current price",
+            )
+            continue
+        min_stop = float(getattr(info, "trade_stops_level", 0)) * float(info.point)
+        if min(abs(entry - stop), abs(target - entry)) < min_stop:
+            _record_entry_diagnostic(
+                asset_data,
+                "small_profit_broker_stop_distance",
+                current_bar_time,
+                f"{strategy} levels are inside broker stop-distance minimum",
+            )
+            continue
+
+        real_risk = calc_risk_for_lot(symbol, order_type, lot, entry, stop)
+        spread = max(float(tick.ask - tick.bid), float(cfg["spread_est"]))
+        estimated_cost = spread * exposure * 0.2 + 0.25
+        if real_risk is None or real_risk + estimated_cost > SMALL_PROFIT_MAX_LOSS_USD:
+            _record_entry_diagnostic(
+                asset_data,
+                "small_profit_risk_cap",
+                current_bar_time,
+                f"{strategy} planned loss plus cost buffer exceeds ${SMALL_PROFIT_MAX_LOSS_USD:.2f}",
+            )
+            continue
+        if not _is_demo_account(mt5.account_info()):
+            _record_entry_diagnostic(
+                asset_data,
+                "small_profit_demo_only",
+                current_bar_time,
+                "Account mode changed; small-profit order blocked",
+            )
+            return
+        result = send_market_order(
+            symbol,
+            order_type,
+            entry,
+            stop,
+            target,
+            lot,
+            magic,
+            f"SP_{strategy.replace(' ', '')}_USD1",
+        )
+        if not result:
+            _record_entry_diagnostic(
+                asset_data,
+                "small_profit_order_failed",
+                current_bar_time,
+                f"MT5 rejected {strategy} demo order",
+            )
+            continue
+        open_magics.add(magic)
+        position_count += 1
+        position_ticket = result[1] if isinstance(result, tuple) else result
+        try:
+            db_ledger.log_signal(
+                symbol=symbol,
+                direction=direction,
+                status="EXECUTED",
+                position_ticket=position_ticket,
+                entry_price=entry,
+                initial_sl=stop,
+                initial_risk_price=abs(entry - stop),
+                initial_risk_currency=real_risk,
+                spread=float(tick.ask - tick.bid),
+                trend_mode=f"DEMO_SMALL_PROFIT_{strategy.upper().replace(' ', '_')}",
+            )
+        except Exception as exc:
+            print(f"⚠️ Error logging {strategy} demo order to db_ledger: {exc}")
+        tg_manager.send_broadcast_alert(
+            f"🧪 <b>Small-profit demo trade opened: {symbol}</b>\n"
+            f"• Strategy: {strategy}\n"
+            f"• Direction: {'BUY' if direction > 0 else 'SELL'}\n"
+            f"• Entry: {entry:.{int(info.digits)}f} | SL: {stop:.{int(info.digits)}f} "
+            f"| $1 gross TP: {target:.{int(info.digits)}f}\n"
+            f"• Lot: {lot:.2f} | Planned risk: ${real_risk + estimated_cost:.2f}"
+        )
+        _record_entry_diagnostic(
+            asset_data,
+            "small_profit_order_opened",
+            current_bar_time,
+            f"{strategy} demo order opened at fixed 0.01 lot",
+        )
+
+
 # ==============================================================================
 # INTELLIGENT POSITION & LOT SIZING
 # ==============================================================================
@@ -494,6 +801,9 @@ def send_market_order(symbol, order_type, price, sl, tp, lot_size, magic, commen
     }
 
     result = mt5.order_send(request)
+    if result is None:
+        print(f"❌ Execution failed ({comment}): {mt5.last_error()}")
+        return None
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         print(f"❌ Execution failed ({comment}): {result.comment} (code {result.retcode})")
         return None
@@ -698,6 +1008,8 @@ def manage_active_trades(symbol, cfg, current_candle, closed_candle=None):
             continue
         if pos.magic == cfg["magic_base"] + V7_MAGIC_OFFSET:
             continue
+        if pos.magic - cfg["magic_base"] in SMALL_PROFIT_MAGIC_OFFSETS.values():
+            continue
 
         ticket = pos.ticket
         entry = pos.price_open
@@ -894,7 +1206,12 @@ def check_daily_loss_guard(force=False):
                 continue
             pnl = d.profit + d.commission + d.swap + getattr(d, "fee", 0.0)
             day_net += pnl
-            key = (o[1], o[2]) if o else (d.symbol, d.position_id)
+            if o:
+                base = ASSET_CONFIGS.get(o[1], {}).get("magic_base", -1)
+                is_small_profit = magic - base in SMALL_PROFIT_MAGIC_OFFSETS.values()
+                key = (o[1], o[2], magic if is_small_profit else None)
+            else:
+                key = (d.symbol, d.position_id, magic)
             setup_pnl[key] = setup_pnl.get(key, 0.0) + pnl
 
         losing_setups = sum(1 for v in setup_pnl.values() if v < 0)
@@ -1028,6 +1345,7 @@ def run_live():
             "last_traded_bar": None,
             "last_v7_bar": None,
             "last_v7_ny_date": None,
+            "last_small_profit_bar": None,
             "entry_diagnostics": {
                 "counts": {},
                 "bar": None,
@@ -1056,7 +1374,7 @@ def run_live():
         print("❌ No active assets available. Check MT5 connection.")
         return
 
-    print("\n🟢 Trading loop active. V7 is restricted to demo accounts; real accounts retain the existing strategy. Press Ctrl+C to stop.\n")
+    print("\n🟢 Trading loop active. Small-profit experiments are demo-only; real accounts retain the existing strategy. Press Ctrl+C to stop.\n")
 
     last_heartbeat = 0
 
@@ -1068,6 +1386,8 @@ def run_live():
             # Check if user paused bot via Telegram
             if tg_manager.is_paused:
                 for symbol, asset_data in LOADED_ASSETS.items():
+                    if _is_demo_account() and SMALL_PROFIT_DEMO_ENABLED:
+                        _manage_small_profit_demo_positions(symbol, asset_data["config"])
                     _close_v7_positions_at_session_end(symbol, asset_data["config"])
                 if print_heartbeat:
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏸️ BOT PAUSED VIA TELEGRAM. Scanning paused.")
@@ -1082,7 +1402,11 @@ def run_live():
                 _close_v7_positions_at_session_end(symbol, cfg)
 
                 if _is_demo_account():
-                    _try_v7_demo_entry(symbol, asset_data, None)
+                    _manage_small_profit_demo_positions(symbol, cfg)
+                    if SMALL_PROFIT_DEMO_ENABLED:
+                        _try_small_profit_demo_entries(symbol, asset_data)
+                    else:
+                        _try_v7_demo_entry(symbol, asset_data, None)
 
                 df = fetch_data(symbol, count_m5=300, count_h1=400, trend_mode=asset_data.get("trend_mode", DEFAULT_TREND_MODE))
                 if df is None or len(df) < 5:

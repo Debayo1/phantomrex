@@ -8,6 +8,8 @@ from bot import (
     check_daily_loss_guard,
     _is_demo_account,
     _try_v7_demo_entry,
+    _try_small_profit_demo_entries,
+    _manage_small_profit_demo_positions,
     _fetch_v7_live_signal,
     _close_v7_positions_at_session_end,
     _record_entry_diagnostic,
@@ -21,6 +23,9 @@ def test_magic_range_filter():
     """Verifies that only magics within magic_base < m <= magic_base + 10 are recognized."""
     # Gold magic base: 101000 -> 101001..101010 valid
     assert _is_bot_magic(101001) is True
+    assert _is_bot_magic(101007) is True
+    assert _is_bot_magic(101008) is True
+    assert _is_bot_magic(101009) is True
     assert _is_bot_magic(101010) is True
     assert _is_bot_magic(101000) is False
     assert _is_bot_magic(101011) is False
@@ -46,6 +51,129 @@ def test_v7_is_demo_only_and_fails_closed(monkeypatch):
     _try_v7_demo_entry("XAUUSDm", asset_data, pd.Timestamp("2026-10-27 12:00"))
 
     assert asset_data["entry_diagnostics"]["last_reason"] == "v7_demo_only"
+
+
+def test_small_profit_experiment_is_demo_only_and_fails_closed(monkeypatch):
+    monkeypatch.setattr(bot.mt5, "account_info", lambda: SimpleNamespace(trade_mode=2))
+    monkeypatch.setattr(
+        bot.mt5,
+        "copy_rates_from_pos",
+        lambda *args: pytest.fail("Fetched data for a non-demo account"),
+    )
+    monkeypatch.setattr(
+        bot.mt5,
+        "positions_get",
+        lambda **kwargs: pytest.fail("Queried positions for a non-demo account"),
+    )
+    monkeypatch.setattr(
+        bot.mt5,
+        "order_send",
+        lambda request: pytest.fail("Sent a small-profit order to a non-demo account"),
+    )
+    asset_data = {"config": {"magic_base": 101000}}
+
+    _try_small_profit_demo_entries("XAUUSDm", asset_data)
+    _manage_small_profit_demo_positions("XAUUSDm", asset_data["config"])
+
+    assert asset_data["entry_diagnostics"]["last_reason"] == "small_profit_demo_only"
+
+
+def test_small_profit_experiment_skips_non_hedging_accounts(monkeypatch):
+    hedging_mode = getattr(bot.mt5, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", 2)
+    monkeypatch.setattr(
+        bot.mt5,
+        "account_info",
+        lambda: SimpleNamespace(trade_mode=0, currency="USD", margin_mode=hedging_mode - 1),
+    )
+    monkeypatch.setattr(
+        bot.mt5,
+        "copy_rates_from_pos",
+        lambda *args: pytest.fail("Fetched data for a netting account"),
+    )
+    asset_data = {"config": {"magic_base": 101000}}
+
+    _try_small_profit_demo_entries("XAUUSDm", asset_data)
+
+    assert asset_data["entry_diagnostics"]["last_reason"] == "small_profit_account_mode"
+
+
+def test_small_profit_demo_entry_uses_capped_order_levels(monkeypatch):
+    import small_profit_strategy
+
+    hedging_mode = getattr(bot.mt5, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", 2)
+    monkeypatch.setattr(
+        bot.mt5,
+        "account_info",
+        lambda: SimpleNamespace(trade_mode=0, currency="USD", margin_mode=hedging_mode),
+    )
+    start = int(pd.Timestamp("2026-10-27 12:00:00").timestamp())
+    rates = [
+        {
+            "time": start + index * 60,
+            "open": 100.0,
+            "high": 100.2,
+            "low": 99.8,
+            "close": 100.1,
+            "spread": 10,
+        }
+        for index in range(60)
+    ]
+    m5_rates = [
+        {
+            "time": start + index * 300,
+            "open": 100.0,
+            "high": 100.2,
+            "low": 99.8,
+            "close": 100.1,
+            "spread": 10,
+        }
+        for index in range(60)
+    ]
+    monkeypatch.setattr(
+        bot.mt5,
+        "copy_rates_from_pos",
+        lambda symbol, timeframe, pos, count: rates if timeframe == bot.mt5.TIMEFRAME_M1 else m5_rates,
+    )
+    monkeypatch.setattr(bot.mt5, "symbol_info", lambda symbol: SimpleNamespace(
+        volume_min=0.01,
+        volume_step=0.01,
+        digits=2,
+        point=0.01,
+        trade_contract_size=100.0,
+        trade_stops_level=0,
+    ))
+    monkeypatch.setattr(bot.mt5, "symbol_info_tick", lambda symbol: SimpleNamespace(ask=100.0, bid=99.9))
+    monkeypatch.setattr(bot.mt5, "positions_get", lambda **kwargs: [])
+    monkeypatch.setattr(bot.mt5, "history_deals_get", lambda *args: [])
+    monkeypatch.setattr(bot.tg_manager, "settings", {"news_filter_enabled": False})
+    monkeypatch.setattr(bot, "check_daily_loss_guard", lambda: (False, ""))
+    monkeypatch.setattr(bot, "calc_risk_for_lot", lambda *args: 2.0)
+    monkeypatch.setattr(bot.db_ledger, "log_signal", lambda **kwargs: 1)
+    monkeypatch.setattr(bot.tg_manager, "send_broadcast_alert", lambda *args: None)
+    signals = pd.DataFrame([{
+        "signal_bar": 58,
+        "strategy": "Trend pullback",
+        "direction": 1,
+        "stop": 99.0,
+    }])
+    monkeypatch.setattr(small_profit_strategy, "generate_signals", lambda *args: signals)
+    requests = []
+    monkeypatch.setattr(
+        bot,
+        "send_market_order",
+        lambda *args: requests.append(args) or (123, 456),
+    )
+    asset_data = {
+        "config": {"magic_base": 101000, "spread_est": 0.25},
+        "last_small_profit_bar": None,
+    }
+
+    _try_small_profit_demo_entries("XAUUSDm", asset_data)
+
+    assert len(requests) == 1
+    _, order_type, entry, stop, target, lot, magic, _ = requests[0]
+    assert order_type == bot.mt5.ORDER_TYPE_BUY
+    assert (entry, stop, target, lot, magic) == (100.0, 99.0, 101.0, 0.01, 101007)
 
 
 def test_v7_skips_reprocessing_the_same_m1_bar(monkeypatch):
