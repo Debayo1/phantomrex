@@ -432,8 +432,77 @@ def _manage_small_profit_demo_positions(symbol, cfg):
     """Close only this experiment's demo positions after the 30-minute limit."""
     if not _is_demo_account():
         return
+    import small_profit_ledger
+
+    try:
+        positions = _small_profit_demo_positions(symbol, cfg)
+    except Exception as exc:
+        print(f"❌ Could not read small-profit positions for {symbol}: {exc}")
+        return
+    try:
+        open_records = small_profit_ledger.get_open_records(symbol)
+    except Exception as exc:
+        print(f"❌ Could not read small-profit result history for {symbol}: {exc}")
+        open_records = []
+    open_by_id = {int(position.ticket): position for position in positions}
+    for record in open_records:
+        position_id = record.get("position_id")
+        if position_id is None or int(position_id) in open_by_id:
+            continue
+        try:
+            deals = mt5.history_deals_get(position=int(position_id))
+        except Exception as exc:
+            print(f"⚠️ Small-profit history sync deferred for {symbol} position {position_id}: {exc}")
+            continue
+        if deals is None:
+            print(
+                f"⚠️ Small-profit history sync deferred for {symbol} "
+                f"position {position_id}: {mt5.last_error()}"
+            )
+            continue
+        exit_deals = [
+            deal for deal in deals
+            if getattr(deal, "entry", None) in (
+                mt5.DEAL_ENTRY_OUT,
+                getattr(mt5, "DEAL_ENTRY_OUT_BY", -1),
+                getattr(mt5, "DEAL_ENTRY_INOUT", -1),
+            )
+        ]
+        if not exit_deals:
+            continue
+        net = sum(
+            float(getattr(deal, "profit", 0.0))
+            + float(getattr(deal, "commission", 0.0))
+            + float(getattr(deal, "swap", 0.0))
+            + float(getattr(deal, "fee", 0.0))
+            for deal in deals
+        )
+        final_exit = max(exit_deals, key=lambda deal: int(getattr(deal, "time", 0)))
+        reason = getattr(final_exit, "reason", None)
+        if reason == getattr(mt5, "DEAL_REASON_TP", object()):
+            exit_label = "TP"
+        elif reason == getattr(mt5, "DEAL_REASON_SL", object()):
+            exit_label = "SL"
+        elif "30m_Time_Exit" in str(getattr(final_exit, "comment", "")):
+            exit_label = "TIME_EXIT"
+        else:
+            exit_label = f"OTHER:{reason}"
+        try:
+            small_profit_ledger.update_record(
+                int(record["id"]),
+                "CLOSED",
+                close_time=datetime.fromtimestamp(
+                    int(final_exit.time), tz=UTC_TZ
+                ).isoformat(),
+                close_price=float(final_exit.price),
+                realized_net_usd=net,
+                exit_reason=exit_label,
+            )
+        except Exception as exc:
+            print(f"❌ Could not persist small-profit close result for {position_id}: {exc}")
+
     now_epoch = datetime.now(UTC_TZ).timestamp()
-    for position in _small_profit_demo_positions(symbol, cfg):
+    for position in positions:
         if now_epoch - float(position.time) < SMALL_PROFIT_MAX_HOLD_MINUTES * 60:
             continue
         if not _is_demo_account():
@@ -493,7 +562,8 @@ def _try_small_profit_demo_entries(symbol, asset_data):
         )
         return
 
-    from small_profit_strategy import generate_signals
+    from small_profit_strategy import STRATEGY_NAMES, generate_signals
+    import small_profit_ledger
 
     m1_rates = mt5.copy_rates_from_pos(symbol, V7_TIMEFRAME, 0, SMALL_PROFIT_M1_LOOKBACK)
     m5_rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 0, SMALL_PROFIT_M5_LOOKBACK)
@@ -509,13 +579,46 @@ def _try_small_profit_demo_entries(symbol, asset_data):
     m5 = pd.DataFrame(m5_rates).sort_values("time").drop_duplicates("time").reset_index(drop=True)
     m1["time"] = pd.to_datetime(m1["time"], unit="s")
     m5["time"] = pd.to_datetime(m5["time"], unit="s")
-    current_bar_time = pd.Timestamp(m1.iloc[-1]["time"])
+    current_bar_time = pd.Timestamp(m1.iloc[-2]["time"])
     if current_bar_time == asset_data.get("last_small_profit_bar"):
         return
-    asset_data["last_small_profit_bar"] = current_bar_time
 
     signals = generate_signals(m1, m5)
     latest = signals[signals["signal_bar"] == len(m1) - 2]
+    signal_by_strategy = {
+        row["strategy"]: row for row in latest.to_dict("records")
+    }
+    candle = m1.iloc[-2]
+    signal_records = {}
+    try:
+        for strategy in STRATEGY_NAMES:
+            row = signal_by_strategy.get(strategy)
+            signal_records[strategy] = small_profit_ledger.record_bar(
+                symbol=symbol,
+                strategy=strategy,
+                signal_time=current_bar_time,
+                status="SIGNAL" if row else "NO_SIGNAL",
+                direction=int(row["direction"]) if row else None,
+                signal_price=float(row["signal_price"]) if row else float(candle["close"]),
+                signal_open=float(row["signal_open"]) if row else float(candle["open"]),
+                signal_high=float(row["signal_high"]) if row else float(candle["high"]),
+                signal_low=float(row["signal_low"]) if row else float(candle["low"]),
+                signal_close=float(row["signal_close"]) if row else float(candle["close"]),
+                spread_points=float(row["spread_points"]) if row else float(candle["spread"]),
+                features=row.get("features") if row else {},
+                decision_reason=None if row else "No candidate signal on closed M1 bar",
+            )
+    except Exception as exc:
+        _record_entry_diagnostic(
+            asset_data,
+            "small_profit_ledger_error",
+            current_bar_time,
+            f"Cannot persist candidate history; entries blocked: {exc}",
+        )
+        print(f"❌ Small-profit candidate logging failed for {symbol}: {exc}")
+        return
+
+    asset_data["last_small_profit_bar"] = current_bar_time
     if latest.empty:
         _record_entry_diagnostic(
             asset_data,
@@ -525,10 +628,27 @@ def _try_small_profit_demo_entries(symbol, asset_data):
         )
         return
 
+    def mark_candidate(strategy, status, reason, **values):
+        try:
+            small_profit_ledger.update_record(
+                signal_records[strategy],
+                status,
+                decision_reason=reason,
+                **values,
+            )
+        except Exception as exc:
+            print(f"❌ Could not update {strategy} history for {symbol}: {exc}")
+
+    def skip_candidates(reason):
+        for candidate_strategy in signal_records:
+            if candidate_strategy in signal_by_strategy:
+                mark_candidate(candidate_strategy, "SKIPPED", reason)
+
     cfg = asset_data["config"]
     info = mt5.symbol_info(symbol)
     tick = mt5.symbol_info_tick(symbol)
     if info is None or tick is None:
+        skip_candidates("Missing current tick or symbol metadata")
         _record_entry_diagnostic(
             asset_data,
             "small_profit_market_data",
@@ -542,6 +662,7 @@ def _try_small_profit_demo_entries(symbol, asset_data):
         or float(info.volume_step) <= 0
         or abs(lot / float(info.volume_step) - round(lot / float(info.volume_step))) > 1e-8
     ):
+        skip_candidates("Broker does not support fixed 0.01-lot size")
         _record_entry_diagnostic(
             asset_data,
             "small_profit_volume_unavailable",
@@ -554,6 +675,7 @@ def _try_small_profit_demo_entries(symbol, asset_data):
     open_magics = {position.magic for position in positions}
     position_count = len(positions)
     if position_count >= SMALL_PROFIT_MAX_POSITIONS_PER_SYMBOL:
+        skip_candidates("Symbol position limit reached")
         _record_entry_diagnostic(
             asset_data,
             "small_profit_position_limit",
@@ -564,22 +686,39 @@ def _try_small_profit_demo_entries(symbol, asset_data):
     if tg_manager.settings.get("news_filter_enabled", True):
         is_news_blocked, news_summary, _ = news_filter.check_news_block()
         if is_news_blocked:
+            skip_candidates(f"News filter: {news_summary}")
             _record_entry_diagnostic(asset_data, "news_filter", current_bar_time, news_summary)
             return
     blocked, reason = check_daily_loss_guard()
     if blocked:
+        skip_candidates(f"Daily loss guard: {reason}")
         _record_entry_diagnostic(asset_data, "daily_loss_guard", current_bar_time, reason)
         return
 
     for signal in latest.to_dict("records"):
         strategy = signal["strategy"]
+        try:
+            if small_profit_ledger.get_record_status(signal_records[strategy]) != "SIGNAL":
+                continue
+        except Exception as exc:
+            _record_entry_diagnostic(
+                asset_data,
+                "small_profit_ledger_error",
+                current_bar_time,
+                f"Cannot verify prior candidate decision; entry blocked: {exc}",
+            )
+            print(f"❌ Small-profit history check failed for {symbol} {strategy}: {exc}")
+            return
         magic = cfg["magic_base"] + SMALL_PROFIT_MAGIC_OFFSETS[strategy]
         if magic in open_magics:
+            mark_candidate(strategy, "SKIPPED", "Strategy position already open")
             continue
         try:
             if _small_profit_traded_this_bar(symbol, magic, current_bar_time):
+                mark_candidate(strategy, "SKIPPED", "Trade already opened for this strategy/bar")
                 continue
         except RuntimeError as exc:
+            mark_candidate(strategy, "SKIPPED", f"History unavailable: {exc}")
             _record_entry_diagnostic(
                 asset_data,
                 "small_profit_history_unavailable",
@@ -591,6 +730,7 @@ def _try_small_profit_demo_entries(symbol, asset_data):
         open_magics = {position.magic for position in positions}
         position_count = len(positions)
         if position_count >= SMALL_PROFIT_MAX_POSITIONS_PER_SYMBOL:
+            mark_candidate(strategy, "SKIPPED", "Symbol position limit reached")
             break
         direction = int(signal["direction"])
         order_type = mt5.ORDER_TYPE_BUY if direction > 0 else mt5.ORDER_TYPE_SELL
@@ -598,6 +738,7 @@ def _try_small_profit_demo_entries(symbol, asset_data):
         stop = round(float(signal["stop"]), int(info.digits))
         exposure = lot * float(info.trade_contract_size)
         if exposure <= 0:
+            mark_candidate(strategy, "SKIPPED", "Invalid contract size")
             _record_entry_diagnostic(
                 asset_data,
                 "small_profit_contract_invalid",
@@ -613,6 +754,7 @@ def _try_small_profit_demo_entries(symbol, asset_data):
             (direction > 0 and not stop < entry < target)
             or (direction < 0 and not target < entry < stop)
         ):
+            mark_candidate(strategy, "SKIPPED", "Invalid stop/target levels at current market price")
             _record_entry_diagnostic(
                 asset_data,
                 "small_profit_invalid_levels",
@@ -622,6 +764,7 @@ def _try_small_profit_demo_entries(symbol, asset_data):
             continue
         min_stop = float(getattr(info, "trade_stops_level", 0)) * float(info.point)
         if min(abs(entry - stop), abs(target - entry)) < min_stop:
+            mark_candidate(strategy, "SKIPPED", "Broker minimum stop distance")
             _record_entry_diagnostic(
                 asset_data,
                 "small_profit_broker_stop_distance",
@@ -634,6 +777,16 @@ def _try_small_profit_demo_entries(symbol, asset_data):
         spread = max(float(tick.ask - tick.bid), float(cfg["spread_est"]))
         estimated_cost = spread * exposure * 0.2 + 0.25
         if real_risk is None or real_risk + estimated_cost > SMALL_PROFIT_MAX_LOSS_USD:
+            mark_candidate(
+                strategy,
+                "SKIPPED",
+                f"Planned loss plus cost buffer exceeds ${SMALL_PROFIT_MAX_LOSS_USD:.2f}",
+                entry_price=entry,
+                stop_loss=stop,
+                take_profit=target,
+                volume=lot,
+                planned_risk_usd=real_risk,
+            )
             _record_entry_diagnostic(
                 asset_data,
                 "small_profit_risk_cap",
@@ -642,6 +795,7 @@ def _try_small_profit_demo_entries(symbol, asset_data):
             )
             continue
         if not _is_demo_account(mt5.account_info()):
+            mark_candidate(strategy, "SKIPPED", "Account mode changed; demo-only guard blocked order")
             _record_entry_diagnostic(
                 asset_data,
                 "small_profit_demo_only",
@@ -660,6 +814,16 @@ def _try_small_profit_demo_entries(symbol, asset_data):
             f"SP_{strategy.replace(' ', '')}_USD1",
         )
         if not result:
+            mark_candidate(
+                strategy,
+                "ORDER_FAILED",
+                "MT5 rejected demo order",
+                entry_price=entry,
+                stop_loss=stop,
+                take_profit=target,
+                volume=lot,
+                planned_risk_usd=real_risk,
+            )
             _record_entry_diagnostic(
                 asset_data,
                 "small_profit_order_failed",
@@ -670,6 +834,20 @@ def _try_small_profit_demo_entries(symbol, asset_data):
         open_magics.add(magic)
         position_count += 1
         position_ticket = result[1] if isinstance(result, tuple) else result
+        order_ticket = result[0] if isinstance(result, tuple) else result
+        mark_candidate(
+            strategy,
+            "OPEN",
+            "Demo order accepted",
+            order_ticket=order_ticket,
+            position_id=position_ticket,
+            volume=lot,
+            entry_time=datetime.now(UTC_TZ).isoformat(),
+            entry_price=entry,
+            stop_loss=stop,
+            take_profit=target,
+            planned_risk_usd=real_risk + estimated_cost,
+        )
         try:
             db_ledger.log_signal(
                 symbol=symbol,

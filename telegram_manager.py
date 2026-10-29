@@ -390,6 +390,7 @@ class TelegramBotManager:
                 types.BotCommand("menu", "Open interactive quick-action buttons"),
                 types.BotCommand("status", "Live market telemetry (Gold & BTC)"),
                 types.BotCommand("stats", "Historical performance, R-multiples & calibration"),
+                types.BotCommand("spstats", "Small-profit demo results by strategy"),
                 types.BotCommand("balance", "Account balance & floating PnL"),
                 types.BotCommand("positions", "List active trades"),
                 types.BotCommand("settings", "View & configure bot parameters"),
@@ -2435,6 +2436,62 @@ class TelegramBotManager:
 
             except Exception as e:
                 bot.reply_to(message, f"⚠️ Error computing stats telemetry: {e}")
+
+        # --- /spstats ---
+        @bot.message_handler(commands=["spstats"])
+        def handle_small_profit_stats(message):
+            if not self.is_authorized(message.chat.id):
+                return
+            try:
+                import small_profit_ledger
+
+                summaries = small_profit_ledger.get_summary()
+                direction_summaries = small_profit_ledger.get_direction_summary()
+                recent = small_profit_ledger.get_recent_closed(limit=5)
+                lines = [
+                    "🧪 <b>SMALL-PROFIT DEMO TEST HISTORY</b>",
+                    "<i>Net results include realized MT5 profit, commission, swap, and fees.</i>",
+                ]
+                if not summaries:
+                    lines.append("No candidate bars recorded yet.")
+                for item in summaries:
+                    closed = int(item["closed_trades"] or 0)
+                    wins = int(item["wins"] or 0)
+                    win_rate = wins / closed * 100 if closed else 0.0
+                    expectancy = item["expectancy_usd"]
+                    expectancy_text = f"${expectancy:+.3f}" if expectancy is not None else "n/a"
+                    lines.append(
+                        f"\n<b>{item['strategy']}</b>\n"
+                        f"• Bars: {item['bars_seen']} | signals: {item['signal_bars']} "
+                        f"| no signal: {item['no_signal_bars']}\n"
+                        f"• Skipped: {item['skipped']} | failed: {item['order_failures']} "
+                        f"| open: {item['open_trades']}\n"
+                        f"• Closed: {closed} | win rate: {win_rate:.1f}% "
+                        f"| net: ${item['net_usd']:+.2f} | expectancy: {expectancy_text}"
+                    )
+                if direction_summaries:
+                    lines.append("\n<b>Direction split (realized)</b>")
+                    for item in direction_summaries:
+                        direction = "BUY" if item["direction"] == 1 else "SELL"
+                        closed = int(item["closed_trades"])
+                        wins = int(item["wins"] or 0)
+                        expectancy = item["expectancy_usd"]
+                        expectancy_text = f"${expectancy:+.3f}" if expectancy is not None else "n/a"
+                        lines.append(
+                            f"• {item['strategy']} {direction}: {wins}/{closed} wins "
+                            f"| net ${item['net_usd']:+.2f} | avg {expectancy_text}"
+                        )
+                if recent:
+                    lines.append("\n<b>Recent closed trades</b>")
+                    for trade in recent:
+                        direction = "BUY" if trade["direction"] == 1 else "SELL"
+                        lines.append(
+                            f"• {trade['symbol']} {trade['strategy']} {direction}: "
+                            f"${trade['realized_net_usd']:+.2f} ({trade['exit_reason']})"
+                        )
+                bot.reply_to(message, "\n".join(lines))
+            except Exception as exc:
+                bot.reply_to(message, f"⚠️ Error reading small-profit history: {exc}")
 
         # --- /analyze ---
         @bot.message_handler(commands=["analyze"])

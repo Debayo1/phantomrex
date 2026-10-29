@@ -104,5 +104,21 @@ def generate_signals(m1_rates, m5_rates):
                 "strategy": name,
                 "direction": direction,
                 "stop": stop,
+                "signal_price": float(row["close"]),
+                "signal_open": float(row["open"]),
+                "signal_high": float(row["high"]),
+                "signal_low": float(row["low"]),
+                "signal_close": float(row["close"]),
+                "spread_points": float(row["spread"]),
+                "features": {
+                    "rsi14": float(row["rsi"]),
+                    "m5_close": float(row["m5_close"]),
+                    "m5_ema20": float(row["m5_ema20"]),
+                    "m5_ema50": float(row["m5_ema50"]),
+                    "bollinger_upper": float(row["bb_upper"]),
+                    "bollinger_lower": float(row["bb_lower"]),
+                    "prior_high_15": float(row["prior_high_15"]),
+                    "prior_low_15": float(row["prior_low_15"]),
+                },
             })
     return pd.DataFrame(output)

@@ -97,8 +97,18 @@ def test_small_profit_experiment_skips_non_hedging_accounts(monkeypatch):
     assert asset_data["entry_diagnostics"]["last_reason"] == "small_profit_account_mode"
 
 
-def test_small_profit_demo_entry_uses_capped_order_levels(monkeypatch):
+@pytest.mark.parametrize(
+    ("direction", "signal_stop", "expected_type", "expected_levels"),
+    [
+        (1, 99.0, bot.mt5.ORDER_TYPE_BUY, (100.0, 99.0, 101.0)),
+        (-1, 101.0, bot.mt5.ORDER_TYPE_SELL, (99.9, 101.0, 98.9)),
+    ],
+)
+def test_small_profit_demo_entry_maps_signal_direction_correctly(
+    monkeypatch, direction, signal_stop, expected_type, expected_levels
+):
     import small_profit_strategy
+    import small_profit_ledger
 
     hedging_mode = getattr(bot.mt5, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", 2)
     monkeypatch.setattr(
@@ -145,6 +155,17 @@ def test_small_profit_demo_entry_uses_capped_order_levels(monkeypatch):
     monkeypatch.setattr(bot.mt5, "symbol_info_tick", lambda symbol: SimpleNamespace(ask=100.0, bid=99.9))
     monkeypatch.setattr(bot.mt5, "positions_get", lambda **kwargs: [])
     monkeypatch.setattr(bot.mt5, "history_deals_get", lambda *args: [])
+    monkeypatch.setattr(
+        small_profit_ledger,
+        "record_bar",
+        lambda **kwargs: 1,
+    )
+    monkeypatch.setattr(small_profit_ledger, "get_record_status", lambda record_id: "SIGNAL")
+    monkeypatch.setattr(
+        small_profit_ledger,
+        "update_record",
+        lambda *args, **kwargs: None,
+    )
     monkeypatch.setattr(bot.tg_manager, "settings", {"news_filter_enabled": False})
     monkeypatch.setattr(bot, "check_daily_loss_guard", lambda: (False, ""))
     monkeypatch.setattr(bot, "calc_risk_for_lot", lambda *args: 2.0)
@@ -153,8 +174,15 @@ def test_small_profit_demo_entry_uses_capped_order_levels(monkeypatch):
     signals = pd.DataFrame([{
         "signal_bar": 58,
         "strategy": "Trend pullback",
-        "direction": 1,
-        "stop": 99.0,
+        "direction": direction,
+        "stop": signal_stop,
+        "signal_price": 100.1,
+        "signal_open": 100.0,
+        "signal_high": 100.2,
+        "signal_low": 99.8,
+        "signal_close": 100.1,
+        "spread_points": 10.0,
+        "features": {"rsi14": 54.0},
     }])
     monkeypatch.setattr(small_profit_strategy, "generate_signals", lambda *args: signals)
     requests = []
@@ -172,8 +200,60 @@ def test_small_profit_demo_entry_uses_capped_order_levels(monkeypatch):
 
     assert len(requests) == 1
     _, order_type, entry, stop, target, lot, magic, _ = requests[0]
-    assert order_type == bot.mt5.ORDER_TYPE_BUY
-    assert (entry, stop, target, lot, magic) == (100.0, 99.0, 101.0, 0.01, 101007)
+    assert order_type == expected_type
+    assert (entry, stop, target) == pytest.approx(expected_levels)
+    assert (lot, magic) == (0.01, 101007)
+
+
+def test_small_profit_position_close_records_net_result(monkeypatch):
+    import small_profit_ledger
+
+    record = {
+        "id": 8,
+        "position_id": 456,
+        "strategy": "Trend pullback",
+        "status": "OPEN",
+    }
+    entry_deal = SimpleNamespace(
+        entry=bot.mt5.DEAL_ENTRY_IN,
+        profit=0.0,
+        commission=-0.02,
+        swap=0.0,
+        fee=0.0,
+        time=1793188800,
+        price=100.0,
+        reason=0,
+        comment="",
+    )
+    exit_deal = SimpleNamespace(
+        entry=bot.mt5.DEAL_ENTRY_OUT,
+        profit=0.9,
+        commission=-0.02,
+        swap=0.0,
+        fee=0.0,
+        time=1793188860,
+        price=101.0,
+        reason=getattr(bot.mt5, "DEAL_REASON_TP", 0),
+        comment="",
+    )
+    monkeypatch.setattr(bot.mt5, "account_info", lambda: SimpleNamespace(trade_mode=0))
+    monkeypatch.setattr(bot.mt5, "positions_get", lambda **kwargs: [])
+    monkeypatch.setattr(bot.mt5, "history_deals_get", lambda **kwargs: [entry_deal, exit_deal])
+    monkeypatch.setattr(small_profit_ledger, "get_open_records", lambda symbol: [record])
+    updates = []
+    monkeypatch.setattr(
+        small_profit_ledger,
+        "update_record",
+        lambda record_id, status, **fields: updates.append((record_id, status, fields)),
+    )
+
+    _manage_small_profit_demo_positions("XAUUSDm", {"magic_base": 101000})
+
+    assert len(updates) == 1
+    record_id, status, fields = updates[0]
+    assert (record_id, status) == (8, "CLOSED")
+    assert fields["realized_net_usd"] == pytest.approx(0.86)
+    assert fields["exit_reason"] == "TP"
 
 
 def test_v7_skips_reprocessing_the_same_m1_bar(monkeypatch):
