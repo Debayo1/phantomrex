@@ -6,7 +6,9 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "signals.db")
+from db_paths import ensure_db_parent, resolve_db_path
+
+DB_PATH = resolve_db_path()
 STRATEGIES = ("Trend pullback", "Range fade", "M1 breakout")
 _TRADE_COLUMNS = {
     "decision_reason",
@@ -36,7 +38,8 @@ def _now():
 
 
 def _connect(db_path=DB_PATH):
-    connection = sqlite3.connect(db_path, timeout=10)
+    resolved_path = ensure_db_parent(db_path)
+    connection = sqlite3.connect(resolved_path, timeout=10)
     connection.execute("PRAGMA busy_timeout = 10000;")
     connection.execute("PRAGMA journal_mode = WAL;")
     connection.row_factory = sqlite3.Row

@@ -10,12 +10,15 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 
-DB_PATH = "signals.db"
+from db_paths import ensure_db_parent, resolve_db_path
+
+DB_PATH = resolve_db_path()
 _db_lock = threading.Lock()
 
 
 def get_db_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    resolved_path = ensure_db_parent(db_path)
+    conn = sqlite3.connect(resolved_path, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.row_factory = sqlite3.Row
     return conn

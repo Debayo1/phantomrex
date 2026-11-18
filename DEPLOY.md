@@ -40,6 +40,30 @@ Research and retraining runs append to CSV files under `runtime_data/`, which is
 
 Back up `runtime_data/` outside the repository before replacing or rebuilding the VPS checkout. Do not copy runtime logs back over the tracked seed registry. If migrating older VPS rows from a Git stash, preserve a backup and append/import those rows into the appropriate runtime log after updating; strategy and retraining logs use separate CSV schemas.
 
+## SQLite Ledger Persistence and VPS Permissions
+
+Both trading ledgers use one SQLite file named `signals.db`. By default it is beside `bot.py`. On VPS installs, use `/dbstatus` after deploying this version to see the exact file path, permissions, integrity, tables, and row counts. `/dbstatus` does not create or replace a missing database.
+
+To place data in a persistent writable folder, configure `PHANTOMREX_DATA_DIR` **before starting the bot**. The bot account must be able to write both the folder and `signals.db` (SQLite WAL also needs folder write access).
+
+For an interactive Windows CMD session:
+
+```cmd
+mkdir C:\PhantomRexData
+set PHANTOMREX_DATA_DIR=C:\PhantomRexData
+python bot.py
+```
+
+For a Windows service, set the machine environment variable from an elevated CMD, then restart the service so it inherits the value:
+
+```cmd
+setx /M PHANTOMREX_DATA_DIR "C:\PhantomRexData"
+```
+
+**Do not set a new directory and start the bot before backing up and migrating the existing database.** A new directory will produce a new, empty `signals.db`; there is no automatic fallback or data migration. First stop the bot, make and verify a SQLite backup of the database at the path reported by `/dbstatus`, copy the verified backup to the chosen persistent folder as `signals.db`, grant the service account write access, then configure the variable and restart. Keep the backup until `/dbstatus` confirms the expected path, integrity, and nonzero row counts. Never delete or overwrite the original database to troubleshoot a permissions error.
+
+At startup the bot checks both ledger schemas and reports readiness. A failed check is printed and sent to Telegram; database-dependent demo small-profit entries remain fail-closed. `/suggest`, `/why`, and `/spstats` report database and permission failures instead of treating them as empty history.
+
 ## V7 Demo Forward Test
 
 The 9am CR (V7) strategy is enabled only when the connected MT5 account reports demo trade mode. On demo accounts it replaces the bot's existing M5/H1 entry strategy; real accounts continue using the existing strategy and cannot open V7 positions. V7 uses the New York 08:00 range and 09:00-10:00 M1 setup, the existing daily-loss/news/position guards, the configured risk percentage and 0.01-lot cap, and a 16:00 New York time exit. It does not require the AI model edge gate. Treat it as a demo forward test, not as evidence of profitability or approval for live trading.

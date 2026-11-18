@@ -31,7 +31,7 @@ ADMINISTRATION = "administration"
 
 MENU_CATEGORIES = (
     ("observe", "Observe", (
-        "status", "balance", "positions", "stats", "spstats", "news", "account",
+        "status", "dbstatus", "balance", "positions", "stats", "spstats", "news", "account",
     ), READ_ONLY),
     ("understand", "Understand", (
         "why", "suggest", "ask", "analyze", "explain",
@@ -54,6 +54,7 @@ MENU_CATEGORIES = (
 COMMANDS = {
     "menu": CommandSpec("menu", "Open categorized control menu", "observe", READ_ONLY, ROLE_VIEWER, ("start", "help")),
     "status": CommandSpec("status", "Live market telemetry", "observe", READ_ONLY, ROLE_VIEWER),
+    "dbstatus": CommandSpec("dbstatus", "Database path, integrity, and ledger counts", "observe", READ_ONLY, ROLE_VIEWER),
     "balance": CommandSpec("balance", "Account balance and PnL", "observe", READ_ONLY, ROLE_VIEWER),
     "positions": CommandSpec("positions", "List active positions", "observe", READ_ONLY, ROLE_VIEWER),
     "account": CommandSpec("account", "View active MT5 account", "observe", READ_ONLY, ROLE_VIEWER),

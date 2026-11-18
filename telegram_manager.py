@@ -8,6 +8,7 @@ import subprocess
 import re
 import html
 import copy
+import sqlite3
 import requests
 import telebot
 from telebot import types
@@ -2296,6 +2297,39 @@ class TelegramBotManager:
 
             bot.reply_to(message, "\n".join(status_lines))
 
+        # --- /dbstatus ---
+        @bot.message_handler(commands=["dbstatus"])
+        def handle_database_status(message):
+            if not self.is_authorized(message.chat.id):
+                return
+            try:
+                from db_paths import get_database_status
+
+                status = get_database_status()
+                last_modified = (
+                    datetime.fromtimestamp(status["last_modified"]).strftime("%Y-%m-%d %H:%M:%S")
+                    if status["last_modified"] is not None else "unavailable"
+                )
+                lines = [
+                    "🗄️ <b>DATABASE STATUS</b>",
+                    f"• Path: <code>{html.escape(status['path'])}</code>",
+                    f"• File exists: {status['exists']}",
+                    f"• Size: {status['size_bytes'] if status['size_bytes'] is not None else 'n/a'} bytes",
+                    f"• Last updated: {last_modified}",
+                    f"• Directory exists/writable: {status['directory_exists']} / {status['directory_writable']}",
+                    f"• Database file writable: {status.get('file_writable', 'n/a')}",
+                    f"• Ready: {status.get('ready', False)}",
+                    f"• SQLite integrity: {html.escape(str(status['integrity']))}",
+                ]
+                for table in ("signals", "small_profit_history"):
+                    count = status["row_counts"].get(table)
+                    lines.append(f"• {table}: {count if count is not None else 'missing table'} rows")
+                if status["error"]:
+                    lines.append(f"• Error: <code>{html.escape(status['error'])}</code>")
+                bot.reply_to(message, "\n".join(lines))
+            except Exception as exc:
+                bot.reply_to(message, f"⚠️ Database diagnostic failed: {html.escape(str(exc))}")
+
         # --- /why ---
         @bot.message_handler(commands=["why"])
         def handle_why(message):
@@ -2348,6 +2382,12 @@ class TelegramBotManager:
                     return
 
                 bot.reply_to(message, "<b>Market explanation</b>\nUse /status for live H1/M5 data or /why trade, /why strategy, or /why paused for recorded evidence.")
+            except (sqlite3.Error, OSError) as exc:
+                bot.reply_to(
+                    message,
+                    f"⚠️ Database error: {html.escape(str(exc))}. Use /dbstatus to inspect the active path and permissions. "
+                    "Changing PHANTOMREX_DATA_DIR alone points to a new database; stop the bot and back up/migrate the existing signals.db first.",
+                )
             except Exception as exc:
                 bot.reply_to(message, f"⚠️ Could not explain the current state: {exc}")
 
@@ -2372,6 +2412,12 @@ class TelegramBotManager:
                     topic=selected_topic,
                 )
                 bot.reply_to(message, render_suggestion(suggestion))
+            except (sqlite3.Error, OSError) as exc:
+                bot.reply_to(
+                    message,
+                    f"⚠️ Database error while building the suggestion: {html.escape(str(exc))}. Use /dbstatus to inspect the active path and permissions. "
+                    "Changing PHANTOMREX_DATA_DIR alone points to a new database; stop the bot and back up/migrate the existing signals.db first.",
+                )
             except Exception as exc:
                 bot.reply_to(message, f"⚠️ Could not build an advisory suggestion: {exc}")
 
@@ -2582,6 +2628,12 @@ class TelegramBotManager:
                             f"${trade['realized_net_usd']:+.2f} ({trade['exit_reason']})"
                         )
                 bot.reply_to(message, "\n".join(lines))
+            except (sqlite3.Error, OSError) as exc:
+                bot.reply_to(
+                    message,
+                    f"⚠️ Database error while reading small-profit history: {html.escape(str(exc))}. Use /dbstatus to inspect the active path and permissions. "
+                    "Changing PHANTOMREX_DATA_DIR alone points to a new database; stop the bot and back up/migrate the existing signals.db first.",
+                )
             except Exception as exc:
                 bot.reply_to(message, f"⚠️ Error reading small-profit history: {exc}")
 

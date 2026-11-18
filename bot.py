@@ -1680,6 +1680,24 @@ def run_live():
     # Start Telegram background polling
     tg_manager.start_polling()
 
+    from db_paths import initialize_database
+
+    database_status = initialize_database()
+    if database_status.get("ready"):
+        print(
+            f"🗄️ Database ready: {database_status['path']} "
+            f"(signals={database_status['row_counts']['signals']}, "
+            f"small_profit={database_status['row_counts']['small_profit_history']})"
+        )
+    else:
+        database_error = database_status.get("error") or "SQLite integrity/schema check failed"
+        print(f"⚠️ Database startup check failed: {database_error}")
+        tg_manager.send_broadcast_alert(
+            "⚠️ <b>Database unavailable or not ready.</b> "
+            "Use /dbstatus for the configured path, permissions, schema, and integrity. "
+            "Demo small-profit entries will fail closed until the ledger is writable."
+        )
+
     LOADED_ASSETS.clear()
 
     for sym_key, cfg in ASSET_CONFIGS.items():
