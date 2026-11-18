@@ -11,6 +11,7 @@ import copy
 import requests
 import telebot
 from telebot import types
+from telegram_command_registry import MENU_CATEGORIES, COMMANDS, get_command, role_allowed
 import MetaTrader5 as mt5
 import numpy as np
 import joblib
@@ -300,25 +301,20 @@ def format_telegram_response(text: str) -> str:
 
 def get_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn_status = types.KeyboardButton("📊 Status")
-    btn_balance = types.KeyboardButton("💰 Balance")
-    btn_positions = types.KeyboardButton("📋 Positions")
-    btn_account = types.KeyboardButton("👤 Account")
-    btn_settings = types.KeyboardButton("⚙️ Settings")
-    btn_tokens = types.KeyboardButton("📊 Token Usage")
-    btn_analyze_gold = types.KeyboardButton("🧠 Analyze Gold")
-    btn_analyze_btc = types.KeyboardButton("🧠 Analyze BTC")
-    btn_signal = types.KeyboardButton("🎯 Paste Signal")
-    btn_pause = types.KeyboardButton("⏸️ Pause/Resume")
-    btn_restart = types.KeyboardButton("🔄 Restart Bot")
-    btn_closeall = types.KeyboardButton("🚨 Close All")
-
-    markup.add(btn_status, btn_balance)
-    markup.add(btn_positions, btn_account)
-    markup.add(btn_settings, btn_tokens)
-    markup.add(btn_analyze_gold, btn_analyze_btc)
-    markup.add(btn_signal, btn_pause)
-    markup.add(btn_restart, btn_closeall)
+    icon_by_category = {
+        "observe": "📊",
+        "understand": "🧠",
+        "trading": "🎯",
+        "risk": "🛡️",
+        "models": "⚙️",
+        "administration": "👥",
+    }
+    buttons = []
+    for key, label, _commands, _capability in MENU_CATEGORIES:
+        buttons.append(types.KeyboardButton(f"{icon_by_category[key]} {label}"))
+    for index in range(0, len(buttons), 2):
+        markup.row(*buttons[index:index + 2])
+    markup.row(types.KeyboardButton("🏠 Main Menu"))
     return markup
 
 
@@ -387,38 +383,8 @@ class TelegramBotManager:
     def _set_menu_commands(self):
         try:
             commands = [
-                types.BotCommand("menu", "Open interactive quick-action buttons"),
-                types.BotCommand("status", "Live market telemetry (Gold & BTC)"),
-                types.BotCommand("stats", "Historical performance, R-multiples & calibration"),
-                types.BotCommand("spstats", "Small-profit demo results by strategy"),
-                types.BotCommand("balance", "Account balance & floating PnL"),
-                types.BotCommand("positions", "List active trades"),
-                types.BotCommand("settings", "View & configure bot parameters"),
-                types.BotCommand("tokens", "Check Gemini AI token usage & quota"),
-                types.BotCommand("setgemini", "Change or update Gemini API key"),
-                types.BotCommand("analyze", "Run AI evaluation on Gold or BTC"),
-                types.BotCommand("pause", "Pause opening new trades"),
-                types.BotCommand("resume", "Resume active trading"),
-                types.BotCommand("closeall", "Emergency close all open trades"),
-                types.BotCommand("adduser", "Authorize a user (GOD only: /adduser <id> [admin|viewer])"),
-                types.BotCommand("grant", "Set user permission (GOD only: /grant <id> admin|viewer)"),
-                types.BotCommand("removeuser", "Revoke user access (GOD only: /removeuser <id>)"),
-                types.BotCommand("listusers", "View authorized users and roles"),
-                types.BotCommand("account", "View active MT5 account & mode (Demo/Live)"),
-                types.BotCommand("login", "Switch to Demo, Live, or custom MT5 account"),
-                types.BotCommand("logout", "Disconnect MT5 session & pause trading"),
-                types.BotCommand("saveaccount", "Save an MT5 account profile"),
-                types.BotCommand("protect", "Authorize SL/TP protection on open trades"),
-                types.BotCommand("signal", "Paste & execute a trade signal"),
-                types.BotCommand("buy", "Quick market buy with SL & TP"),
-                types.BotCommand("sell", "Quick market sell with SL & TP"),
-                types.BotCommand("retrain", "Retrain AI models on freshest MT5 data"),
-                types.BotCommand("rollback", "Restore previous AI model backup (.prev.pkl)"),
-                types.BotCommand("restart", "Restart bot engine & reload source code"),
-                types.BotCommand("update", "Pull latest code updates from GitHub"),
-                types.BotCommand("news", "View upcoming high-impact economic news"),
-                types.BotCommand("resetguard", "Reset the daily loss guard circuit breaker (GOD only)"),
-                types.BotCommand("help", "Help & command documentation")
+                types.BotCommand(spec.name, spec.description)
+                for spec in COMMANDS.values()
             ]
             self.bot.set_my_commands(commands)
 
@@ -511,6 +477,16 @@ class TelegramBotManager:
         if cid == self.god_id:
             return True
         return self.get_user_role(cid) in [ROLE_GOD, ROLE_ADMIN]
+
+    def authorize_command(self, chat_id, command_name):
+        """Central role check for registry-based command dispatch."""
+        cid = int(chat_id)
+        if not self.is_authorized(cid):
+            return False
+        spec = get_command(command_name)
+        if spec is None:
+            return False
+        return role_allowed(self.get_user_role(cid), spec)
 
     def send_broadcast_alert(self, text, reply_markup=None):
         if not self.bot or not self.authorized_chat_ids:
@@ -1134,7 +1110,7 @@ class TelegramBotManager:
                 role_desc = "You have read-only access to monitor real-time trade alerts, telemetry, financial balance, and chat with the AI."
 
             welcome_msg = (
-                "🏛️ <b>WELCOME TO PHANTOMREX QUANTITATIVE AI</b>\n"
+                "🏛️ <b>PHANTOMREX CONTROL CENTER</b>\n"
                 "<i>Institutional-Grade Algorithmic Trading System for MetaTrader 5</i>\n\n"
                 f"• <b>Your Access Level:</b> {role_badge}\n"
                 f"<i>{role_desc}</i>\n\n"
@@ -1146,11 +1122,12 @@ class TelegramBotManager:
                 "• 💬 <b>Conversational Telemetry:</b> Integrated Google Gemini AI for instant real-time market audits, volatility analysis, and conversational Q&A.\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 "🧭 <b>QUICK CONTROLS & COMMANDS:</b>\n"
-                "• <b>📊 Status / 💰 Balance:</b> Live market telemetry, equity, & floating PnL\n"
-                "• <b>📋 Positions:</b> View active orders with live profit tracking\n"
-                "• <b>⚙️ Settings:</b> One-touch touch panel for risk, AI thresholds, & safety toggles\n"
-                "• <b>👤 Account:</b> Seamlessly switch between Demo & Live MT5 accounts\n"
-                "• <b>🧠 Analyze:</b> On-demand AI evaluation of Gold or Bitcoin setups\n\n"
+                "• <b>📊 Observe:</b> Status, balance, positions, performance, and news\n"
+                "• <b>🧠 Understand:</b> /why, /suggest, /ask, and /analyze\n"
+                "• <b>🎯 Trading Control:</b> Pause, resume, protect, and emergency close\n"
+                "• <b>🛡️ Risk and Account:</b> Settings and MT5 account profiles\n"
+                "• <b>⚙️ Models and System:</b> Retrain, rollback, restart, and maintenance\n"
+                "• <b>👥 Administration:</b> User authorization and role management\n\n"
                 "<i>💡 Use the interactive buttons below, or simply ask me any market question in plain English!</i>"
             )
             bot.send_message(cid, welcome_msg, reply_markup=get_main_keyboard())
@@ -2319,6 +2296,97 @@ class TelegramBotManager:
 
             bot.reply_to(message, "\n".join(status_lines))
 
+        # --- /why ---
+        @bot.message_handler(commands=["why"])
+        def handle_why(message):
+            cid = message.chat.id
+            if not self.is_authorized(cid):
+                return
+            try:
+                import small_profit_ledger
+                from decision_explanation import DecisionContext, render_decision
+
+                parts = message.text.strip().split(maxsplit=1)
+                topic = parts[1].lower().strip() if len(parts) > 1 else "market"
+                if topic == "strategy":
+                    summaries = small_profit_ledger.get_summary()
+                    lines = ["🧠 <b>Small-Profit Strategy Evidence</b>"]
+                    if not summaries:
+                        lines.append("No candidate bars recorded yet. No adaptive model is active.")
+                    for item in summaries:
+                        closed = int(item["closed_trades"] or 0)
+                        status = "insufficient evidence" if closed < 30 else "evidence sample available"
+                        lines.append(
+                            f"• {item['strategy']}: {closed}/{30} closed trades; {status}; "
+                            f"net ${item['net_usd']:+.2f}"
+                        )
+                    bot.reply_to(message, "\n".join(lines))
+                    return
+
+                if topic == "paused":
+                    reason = "Paused by owner" if self.is_paused else "No active pause"
+                    bot.reply_to(message, f"⏸️ <b>Pause State</b>\n• {reason}\n• News, daily-loss, position, and data guards remain independent.")
+                    return
+
+                if topic == "trade":
+                    recent = small_profit_ledger.get_recent_closed(limit=1)
+                    if not recent:
+                        context = DecisionContext(
+                            decision="NO_TRADE",
+                            reason="INSUFFICIENT_DATA",
+                            closed_trades=0,
+                        )
+                    else:
+                        trade = recent[0]
+                        context = DecisionContext(
+                            decision="TRADE_APPROVED" if trade["realized_net_usd"] is not None else "NO_TRADE",
+                            reason="RECENT_TRADE_RECORD",
+                            strategy=trade["strategy"],
+                            symbol=trade["symbol"],
+                        )
+                    bot.reply_to(message, render_decision(context))
+                    return
+
+                bot.reply_to(message, "<b>Market explanation</b>\nUse /status for live H1/M5 data or /why trade, /why strategy, or /why paused for recorded evidence.")
+            except Exception as exc:
+                bot.reply_to(message, f"⚠️ Could not explain the current state: {exc}")
+
+        # --- /suggest ---
+        @bot.message_handler(commands=["suggest"])
+        def handle_suggest(message):
+            cid = message.chat.id
+            if not self.is_authorized(cid):
+                return
+            try:
+                import small_profit_ledger
+                from decision_explanation import build_suggestion, render_suggestion
+
+                topic = message.text.strip().split(maxsplit=1)
+                selected_topic = topic[1].strip().lower() if len(topic) > 1 else "research"
+                allowed_topics = {"strategy", "regime", "session", "risk", "research"}
+                if selected_topic not in allowed_topics:
+                    selected_topic = "research"
+
+                suggestion = build_suggestion(
+                    small_profit_ledger.get_summary(),
+                    topic=selected_topic,
+                )
+                bot.reply_to(message, render_suggestion(suggestion))
+            except Exception as exc:
+                bot.reply_to(message, f"⚠️ Could not build an advisory suggestion: {exc}")
+
+        # --- /ask ---
+        @bot.message_handler(commands=["ask"])
+        def handle_ask(message):
+            cid = message.chat.id
+            if not self.is_authorized(cid):
+                return
+            parts = message.text.strip().split(maxsplit=1)
+            if len(parts) < 2:
+                bot.reply_to(message, "Usage: <code>/ask &lt;read-only question&gt;</code>")
+                return
+            bot.reply_to(message, "This assistant is read-only. Use /status, /why, /suggest, or /spstats for grounded bot information.")
+
         # --- /balance ---
         @bot.message_handler(commands=["balance"])
         def handle_balance(message):
@@ -2447,6 +2515,7 @@ class TelegramBotManager:
 
                 summaries = small_profit_ledger.get_summary()
                 direction_summaries = small_profit_ledger.get_direction_summary()
+                candle_summaries = small_profit_ledger.get_candle_outcome_summary()
                 recent = small_profit_ledger.get_recent_closed(limit=5)
                 lines = [
                     "🧪 <b>SMALL-PROFIT DEMO TEST HISTORY</b>",
@@ -2480,6 +2549,29 @@ class TelegramBotManager:
                         lines.append(
                             f"• {item['strategy']} {direction}: {wins}/{closed} wins "
                             f"| net ${item['net_usd']:+.2f} | avg {expectancy_text}"
+                        )
+                if candle_summaries:
+                    lines.append("\n<b>Signal candles & excursions</b>")
+                    for item in candle_summaries:
+                        direction = "BUY" if item["direction"] == 1 else "SELL"
+                        body = item["avg_signal_body_fraction"]
+                        upper = item["avg_signal_upper_wick_fraction"]
+                        lower = item["avg_signal_lower_wick_fraction"]
+                        mae = item["avg_mae_r"]
+                        mfe = item["avg_mfe_r"]
+                        body_text = f"{body * 100:.0f}%" if body is not None else "n/a"
+                        wick_text = (
+                            f"U{upper * 100:.0f}%/L{lower * 100:.0f}%"
+                            if upper is not None and lower is not None else "n/a"
+                        )
+                        excursion_text = (
+                            f"MAE {mae:.2f}R / MFE {mfe:.2f}R"
+                            if mae is not None and mfe is not None else "excursions pending"
+                        )
+                        lines.append(
+                            f"• {item['strategy']} {direction} {item['outcome']} "
+                            f"(n={item['closed_trades']}): body {body_text}, "
+                            f"wicks {wick_text}, {excursion_text}"
                         )
                 if recent:
                     lines.append("\n<b>Recent closed trades</b>")
@@ -2749,6 +2841,49 @@ class TelegramBotManager:
                 + "\n\n<i>To change permissions: <code>/grant &lt;id&gt; admin</code> or <code>/grant &lt;id&gt; viewer</code></i>"
             )
 
+        # --- Categorized Menu Text Handler ---
+        @bot.message_handler(func=lambda msg: True)
+        def handle_category_menu(message):
+            cid = message.chat.id
+            if not self.is_authorized(cid):
+                return
+
+            text = message.text.strip()
+            if text == "🏠 Main Menu":
+                bot.reply_to(message, "<b>PhantomRex Control Center</b>", reply_markup=get_main_keyboard())
+                return
+
+            icon_by_category = {
+                "observe": "📊",
+                "understand": "🧠",
+                "trading": "🎯",
+                "risk": "🛡️",
+                "models": "⚙️",
+                "administration": "👥",
+            }
+            selected = None
+            for key, label, _commands, _capability in MENU_CATEGORIES:
+                if text in (f"{icon_by_category[key]} {label}", label):
+                    selected = (key, label)
+                    break
+            if selected is None:
+                return
+
+            key, label = selected
+            role = self.get_user_role(cid)
+            lines = [f"<b>{icon_by_category[key]} {label}</b>", ""]
+            for spec in COMMANDS.values():
+                if spec.category != key:
+                    continue
+                locked = " 🔒" if not (
+                    role == ROLE_GOD
+                    or (role == ROLE_ADMIN and spec.minimum_role != ROLE_GOD)
+                    or (role == ROLE_VIEWER and spec.minimum_role == ROLE_VIEWER)
+                ) else ""
+                lines.append(f"/{spec.name} — {spec.description}{locked}")
+            lines.append("\nUse a command, or press Main Menu to return.")
+            bot.reply_to(message, "\n".join(lines), reply_markup=get_main_keyboard())
+
         # --- Button Text Handler & Natural Chat ---
         @bot.message_handler(func=lambda msg: True)
         def handle_button_clicks_and_chat(message):
@@ -2757,6 +2892,15 @@ class TelegramBotManager:
                 return
 
             text = message.text.strip()
+            category_labels = {"🏠 Main Menu"}
+            icon_by_category = {
+                "observe": "📊", "understand": "🧠", "trading": "🎯",
+                "risk": "🛡️", "models": "⚙️", "administration": "👥",
+            }
+            for key, label, _commands, _capability in MENU_CATEGORIES:
+                category_labels.add(f"{icon_by_category[key]} {label}")
+            if text in category_labels:
+                return
 
             # Handle interactive awaiting states (e.g. typing a new API key)
             if cid in self.awaiting_input:
@@ -2886,7 +3030,8 @@ class TelegramBotManager:
                 bot.send_chat_action(cid, "typing")
                 pos_summary = ", ".join([f"#{p.ticket} {p.symbol} {'BUY' if p.type==0 else 'SELL'} {p.volume}L @ ${p.price_open:.2f} (PnL: ${p.profit:.2f})" for p in positions]) or "None"
                 system_prompt = (
-                    "You are PhantomRex AI, an elite institutional quantitative trading assistant for MetaTrader 5.\n"
+                    "You are PhantomRex AI, a read-only quantitative communication assistant for MetaTrader 5.\n"
+                    "Never place, recommend, or translate an order. Never change lot size, stop, target, account, guard, or model.\n"
                     "LIVE REAL-TIME TELEMETRY:\n"
                     f"- Account Balance: ${acc.balance if acc else 0:,.2f} | Equity: ${acc.equity if acc else 0:,.2f} | Margin Level: {acc.margin_level if acc else 0:.1f}%\n"
                     f"- Gold (XAUUSDm): {gold_intel}\n"
@@ -2919,8 +3064,13 @@ class TelegramBotManager:
                         c_tokens = meta.get("candidatesTokenCount", 0)
                         self._record_token_usage(p_tokens, c_tokens)
 
-                        formatted_ans = format_telegram_response(ans)
-                        bot.reply_to(message, formatted_ans)
+                        lower_ans = ans.lower()
+                        prohibited = ("place an order", "buy now", "sell now", "change the lot", "disable guard", "switch account", "promote the model")
+                        if any(phrase in lower_ans for phrase in prohibited):
+                            bot.reply_to(message, "I can explain bot data, but I cannot initiate or authorize a trade or configuration change. Use the existing whitelisted owner commands.")
+                        else:
+                            formatted_ans = format_telegram_response(ans)
+                            bot.reply_to(message, formatted_ans)
                         return
             except Exception as e:
                 print(f"⚠️ Gemini API query failed: {e}")

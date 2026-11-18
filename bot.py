@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import time
 import os
+import json
 import joblib
 import sys
 from datetime import datetime, timedelta, timezone
@@ -428,6 +429,48 @@ def _small_profit_traded_this_bar(symbol, magic, bar_time):
     )
 
 
+def _small_profit_excursion_metrics(executable_prices, direction, entry_price, stop_loss):
+    prices = np.asarray(executable_prices, dtype=float)
+    prices = prices[np.isfinite(prices) & (prices > 0)]
+    if not len(prices) or direction not in (-1, 1) or entry_price <= 0:
+        return None
+
+    if direction > 0:
+        mfe = max(0.0, float(prices.max()) - entry_price)
+        mae = max(0.0, entry_price - float(prices.min()))
+    else:
+        mfe = max(0.0, entry_price - float(prices.min()))
+        mae = max(0.0, float(prices.max()) - entry_price)
+
+    risk_distance = abs(entry_price - stop_loss)
+    return {
+        "mfe_price": mfe,
+        "mae_price": mae,
+        "mfe_r": mfe / risk_distance if risk_distance > 0 else None,
+        "mae_r": mae / risk_distance if risk_distance > 0 else None,
+    }
+
+
+def _small_profit_entry_candle_snapshot(candle, tick):
+    from small_profit_strategy import candle_anatomy
+
+    anatomy = candle_anatomy(
+        candle["open"], candle["high"], candle["low"], candle["close"]
+    )
+    return {
+        "time": pd.Timestamp(candle["time"]).isoformat(),
+        "open": float(candle["open"]),
+        "high": float(candle["high"]),
+        "low": float(candle["low"]),
+        "close": float(candle["close"]),
+        "spread_points": float(candle["spread"]),
+        "snapshot_bid": float(tick.bid),
+        "snapshot_ask": float(tick.ask),
+        "snapshot_spread": float(tick.ask - tick.bid),
+        **anatomy,
+    }
+
+
 def _manage_small_profit_demo_positions(symbol, cfg):
     """Close only this experiment's demo positions after the 30-minute limit."""
     if not _is_demo_account():
@@ -470,6 +513,10 @@ def _manage_small_profit_demo_positions(symbol, cfg):
         ]
         if not exit_deals:
             continue
+        entry_deals = [
+            deal for deal in deals
+            if getattr(deal, "entry", None) == mt5.DEAL_ENTRY_IN
+        ]
         net = sum(
             float(getattr(deal, "profit", 0.0))
             + float(getattr(deal, "commission", 0.0))
@@ -478,6 +525,11 @@ def _manage_small_profit_demo_positions(symbol, cfg):
             for deal in deals
         )
         final_exit = max(exit_deals, key=lambda deal: int(getattr(deal, "time", 0)))
+        first_entry = min(
+            entry_deals,
+            key=lambda deal: int(getattr(deal, "time", 0)),
+            default=None,
+        )
         reason = getattr(final_exit, "reason", None)
         if reason == getattr(mt5, "DEAL_REASON_TP", object()):
             exit_label = "TP"
@@ -487,16 +539,96 @@ def _manage_small_profit_demo_positions(symbol, cfg):
             exit_label = "TIME_EXIT"
         else:
             exit_label = f"OTHER:{reason}"
+        close_dt = datetime.fromtimestamp(int(final_exit.time), tz=UTC_TZ)
+        entry_dt = (
+            datetime.fromtimestamp(int(first_entry.time), tz=UTC_TZ)
+            if first_entry is not None else None
+        )
+        entry_price = (
+            float(first_entry.price)
+            if first_entry is not None and getattr(first_entry, "price", None) is not None
+            else record.get("entry_price")
+        )
+        direction = record.get("direction")
+        if direction not in (-1, 1) and first_entry is not None:
+            if getattr(first_entry, "type", None) == mt5.DEAL_TYPE_BUY:
+                direction = 1
+            elif getattr(first_entry, "type", None) == mt5.DEAL_TYPE_SELL:
+                direction = -1
+
+        excursion = None
+        tick_history = getattr(mt5, "copy_ticks_range", None)
+        if (
+            callable(tick_history)
+            and entry_dt is not None
+            and entry_price is not None
+            and direction in (-1, 1)
+        ):
+            try:
+                ticks = tick_history(
+                    symbol,
+                    entry_dt,
+                    close_dt,
+                    getattr(mt5, "COPY_TICKS_ALL", 0),
+                )
+                if ticks is None:
+                    print(
+                        f"⚠️ Small-profit excursion history unavailable for "
+                        f"{position_id}: {mt5.last_error()}"
+                    )
+                elif len(ticks):
+                    price_field = "bid" if direction > 0 else "ask"
+                    if price_field in (ticks.dtype.names or ()):
+                        executable_prices = np.append(
+                            ticks[price_field].astype(float),
+                            float(final_exit.price),
+                        )
+                        excursion = _small_profit_excursion_metrics(
+                            executable_prices,
+                            direction,
+                            float(entry_price),
+                            float(record.get("stop_loss") or 0.0),
+                        )
+                    if excursion is None:
+                        print(
+                            f"⚠️ Small-profit excursion ticks missing executable "
+                            f"{price_field} prices for {position_id}"
+                        )
+                else:
+                    print(
+                        f"⚠️ No tick history returned for small-profit position "
+                        f"{position_id}; excursion metrics left blank"
+                    )
+            except Exception as exc:
+                print(
+                    f"⚠️ Could not compute small-profit excursion metrics for "
+                    f"{position_id}: {exc}"
+                )
+        elif entry_dt is not None and entry_price is not None:
+            print(
+                f"⚠️ Small-profit excursion metrics unavailable for {position_id}: "
+                "MT5 tick history or entry direction is missing"
+            )
+
+        close_fields = {
+            "close_time": close_dt.isoformat(),
+            "close_price": float(final_exit.price),
+            "realized_net_usd": net,
+            "exit_reason": exit_label,
+            "entry_time": entry_dt.isoformat() if entry_dt else record.get("entry_time"),
+            "entry_price": entry_price,
+            "hold_seconds": (
+                max(0.0, (close_dt - entry_dt).total_seconds())
+                if entry_dt else None
+            ),
+        }
+        if excursion:
+            close_fields.update(excursion)
         try:
             small_profit_ledger.update_record(
                 int(record["id"]),
                 "CLOSED",
-                close_time=datetime.fromtimestamp(
-                    int(final_exit.time), tz=UTC_TZ
-                ).isoformat(),
-                close_price=float(final_exit.price),
-                realized_net_usd=net,
-                exit_reason=exit_label,
+                **close_fields,
             )
         except Exception as exc:
             print(f"❌ Could not persist small-profit close result for {position_id}: {exc}")
@@ -562,11 +694,16 @@ def _try_small_profit_demo_entries(symbol, asset_data):
         )
         return
 
-    from small_profit_strategy import STRATEGY_NAMES, generate_signals
+    from small_profit_strategy import (
+        STRATEGY_NAMES,
+        generate_signals,
+        shadow_filter_assessment,
+    )
     import small_profit_ledger
 
     m1_rates = mt5.copy_rates_from_pos(symbol, V7_TIMEFRAME, 0, SMALL_PROFIT_M1_LOOKBACK)
     m5_rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 0, SMALL_PROFIT_M5_LOOKBACK)
+    h1_rates = mt5.copy_rates_from_pos(symbol, TIMEFRAME_HIGH, 0, 400)
     if m1_rates is None or len(m1_rates) < 60 or m5_rates is None or len(m5_rates) < 55:
         _record_entry_diagnostic(
             asset_data,
@@ -577,8 +714,11 @@ def _try_small_profit_demo_entries(symbol, asset_data):
 
     m1 = pd.DataFrame(m1_rates).sort_values("time").drop_duplicates("time").reset_index(drop=True)
     m5 = pd.DataFrame(m5_rates).sort_values("time").drop_duplicates("time").reset_index(drop=True)
+    h1 = pd.DataFrame(h1_rates).sort_values("time").drop_duplicates("time").reset_index(drop=True) if h1_rates is not None else pd.DataFrame()
     m1["time"] = pd.to_datetime(m1["time"], unit="s")
     m5["time"] = pd.to_datetime(m5["time"], unit="s")
+    if not h1.empty:
+        h1["time"] = pd.to_datetime(h1["time"], unit="s")
     current_bar_time = pd.Timestamp(m1.iloc[-2]["time"])
     if current_bar_time == asset_data.get("last_small_profit_bar"):
         return
@@ -589,10 +729,23 @@ def _try_small_profit_demo_entries(symbol, asset_data):
         row["strategy"]: row for row in latest.to_dict("records")
     }
     candle = m1.iloc[-2]
+    from market_regime import classify_market_context
+
+    market_context = classify_market_context(m1, m5, h1, tick=mt5.symbol_info_tick(symbol))
+    market_context["baseline"] = "SP-BASELINE"
     signal_records = {}
     try:
         for strategy in STRATEGY_NAMES:
             row = signal_by_strategy.get(strategy)
+            features = dict(row.get("features") or {}) if row else {}
+            features.update(market_context)
+            if row:
+                features["shadow_filter"] = shadow_filter_assessment(
+                    symbol,
+                    strategy,
+                    int(row["direction"]),
+                    current_bar_time,
+                )
             signal_records[strategy] = small_profit_ledger.record_bar(
                 symbol=symbol,
                 strategy=strategy,
@@ -605,7 +758,7 @@ def _try_small_profit_demo_entries(symbol, asset_data):
                 signal_low=float(row["signal_low"]) if row else float(candle["low"]),
                 signal_close=float(row["signal_close"]) if row else float(candle["close"]),
                 spread_points=float(row["spread_points"]) if row else float(candle["spread"]),
-                features=row.get("features") if row else {},
+                features=features,
                 decision_reason=None if row else "No candidate signal on closed M1 bar",
             )
     except Exception as exc:
@@ -656,6 +809,27 @@ def _try_small_profit_demo_entries(symbol, asset_data):
             "Missing current tick or symbol metadata",
         )
         return
+    try:
+        entry_candle = _small_profit_entry_candle_snapshot(m1.iloc[-1], tick)
+        entry_candle_json = json.dumps(entry_candle, sort_keys=True)
+    except (KeyError, TypeError, ValueError) as exc:
+        skip_candidates(f"Entry candle snapshot unavailable: {exc}")
+        _record_entry_diagnostic(
+            asset_data,
+            "small_profit_entry_candle_invalid",
+            current_bar_time,
+            str(exc),
+        )
+        return
+    tick_time_msc = int(getattr(tick, "time_msc", 0) or 0)
+    tick_time = (
+        datetime.fromtimestamp(tick_time_msc / 1000.0, tz=UTC_TZ)
+        if tick_time_msc > 0
+        else datetime.fromtimestamp(
+            float(getattr(tick, "time", 0) or datetime.now(UTC_TZ).timestamp()),
+            tz=UTC_TZ,
+        )
+    )
     lot = MAX_LOT_CAP
     if (
         float(info.volume_min) > lot
@@ -842,8 +1016,9 @@ def _try_small_profit_demo_entries(symbol, asset_data):
             order_ticket=order_ticket,
             position_id=position_ticket,
             volume=lot,
-            entry_time=datetime.now(UTC_TZ).isoformat(),
+            entry_time=tick_time.isoformat(),
             entry_price=entry,
+            entry_candle_json=entry_candle_json,
             stop_loss=stop,
             take_profit=target,
             planned_risk_usd=real_risk + estimated_cost,
