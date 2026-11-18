@@ -18,8 +18,8 @@ _db_lock = threading.Lock()
 
 def get_db_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
     resolved_path = ensure_db_parent(db_path)
-    conn = sqlite3.connect(resolved_path, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    conn = sqlite3.connect(resolved_path, timeout=30, check_same_thread=False)
+    conn.execute("PRAGMA busy_timeout = 30000;")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -28,6 +28,7 @@ def init_db(db_path: str = DB_PATH):
     with _db_lock:
         conn = get_db_connection(db_path)
         try:
+            conn.execute("PRAGMA journal_mode = WAL;")
             conn.execute("""
             CREATE TABLE IF NOT EXISTS signals (
                 signal_id INTEGER PRIMARY KEY AUTOINCREMENT,

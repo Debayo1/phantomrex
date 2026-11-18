@@ -2631,8 +2631,8 @@ class TelegramBotManager:
             except (sqlite3.Error, OSError) as exc:
                 bot.reply_to(
                     message,
-                    f"⚠️ Database error while reading small-profit history: {html.escape(str(exc))}. Use /dbstatus to inspect the active path and permissions. "
-                    "Changing PHANTOMREX_DATA_DIR alone points to a new database; stop the bot and back up/migrate the existing signals.db first.",
+                    f"⚠️ /spstats database error: {html.escape(str(exc))}. "
+                    "Check /dbstatus. Do not change PHANTOMREX_DATA_DIR unless you are intentionally migrating the database.",
                 )
             except Exception as exc:
                 bot.reply_to(message, f"⚠️ Error reading small-profit history: {exc}")

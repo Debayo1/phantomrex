@@ -3,12 +3,14 @@
 import json
 import os
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from db_paths import ensure_db_parent, resolve_db_path
 
 DB_PATH = resolve_db_path()
+_db_lock = threading.RLock()
 STRATEGIES = ("Trend pullback", "Range fade", "M1 breakout")
 _TRADE_COLUMNS = {
     "decision_reason",
@@ -39,24 +41,25 @@ def _now():
 
 def _connect(db_path=DB_PATH):
     resolved_path = ensure_db_parent(db_path)
-    connection = sqlite3.connect(resolved_path, timeout=10)
-    connection.execute("PRAGMA busy_timeout = 10000;")
-    connection.execute("PRAGMA journal_mode = WAL;")
+    connection = sqlite3.connect(resolved_path, timeout=30)
+    connection.execute("PRAGMA busy_timeout = 30000;")
     connection.row_factory = sqlite3.Row
     return connection
 
 
 @contextmanager
 def _connection(db_path=DB_PATH):
-    connection = _connect(db_path)
-    try:
-        yield connection
-    finally:
-        connection.close()
+    with _db_lock:
+        connection = _connect(db_path)
+        try:
+            yield connection
+        finally:
+            connection.close()
 
 
 def init_db(db_path=DB_PATH):
     with _connection(db_path) as connection:
+        connection.execute("PRAGMA journal_mode = WAL;")
         connection.execute("""
             CREATE TABLE IF NOT EXISTS small_profit_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

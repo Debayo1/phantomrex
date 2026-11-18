@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -234,6 +235,30 @@ def test_features_are_saved_as_json(tmp_path):
         ).fetchone()[0]
 
     assert json.loads(encoded) == {"m5_ema50": 68200, "rsi14": 63.5}
+
+
+def test_concurrent_ledger_reads_and_writes_are_serialized(tmp_path):
+    database = str(tmp_path / "small_profit.db")
+    small_profit_ledger.init_db(database)
+
+    def write_record(index):
+        return record_bar(
+            symbol="BTCUSDm",
+            strategy="M1 breakout",
+            signal_time=f"2026-10-29 10:{index:02d}:00",
+            status="NO_SIGNAL",
+            db_path=database,
+        )
+
+    def read_summary(_):
+        return get_summary(database)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        writes = list(executor.map(write_record, range(20)))
+        summaries = list(executor.map(read_summary, range(20)))
+
+    assert len(set(writes)) == 20
+    assert summaries[-1][0]["bars_seen"] == 20
 
 
 def test_update_rejects_unapproved_columns(tmp_path):
